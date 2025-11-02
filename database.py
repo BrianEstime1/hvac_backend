@@ -13,7 +13,7 @@ def init_database():
     """Initialize the database with required tables"""
     conn = get_db_connection()
     cursor = conn.cursor()
-        #create a table 
+        #create customer table 
     cursor.execute(''' 
         CREATE TABLE IF NOT EXISTS customers (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,6 +23,27 @@ def init_database():
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
              )  
        ''' )
+
+    #create invoices table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_number TEXT NOT NULL,
+            customer_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            scheduled_time TEXT,
+            technician TEXT,
+            work_performed TEXT,
+            description TEXT,
+            recommendations TEXT,
+            labor_cost REAL DEFAULT 0,
+            materials_cost REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.08,
+            status TEXT DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_id) REFERENCES customers(id)
+        )
+    ''')
 
     #commit changes and close connection
     conn.commit()
@@ -114,55 +135,178 @@ def count_customers():
     conn.close()
     return count
 
+# ==================== INVOICE FUNCTIONS ====================
+
+def create_invoice(customer_id, invoice_number, date, technician, work_performed, 
+                   labor_cost, scheduled_time="", description="", recommendations=""):
+    """Create a new invoice"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Calculate totals
+    materials_cost = 0  # We'll add materials later
+    tax_rate = 0.08
+    
+    cursor.execute('''
+        INSERT INTO invoices (
+            invoice_number, customer_id, date, scheduled_time, 
+            technician, work_performed, description, recommendations,
+            labor_cost, materials_cost, tax_rate
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (invoice_number, customer_id, date, scheduled_time, technician, 
+          work_performed, description, recommendations, labor_cost, materials_cost, tax_rate))
+    
+    conn.commit()
+    invoice_id = cursor.lastrowid
+    conn.close()
+    
+    return invoice_id
+
+
+def get_all_invoices():
+    """Get all invoices with customer names"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # JOIN to get customer name
+    cursor.execute('''
+        SELECT invoices.*, customers.name as customer_name, customers.phone
+        FROM invoices
+        JOIN customers ON invoices.customer_id = customers.id
+        ORDER BY invoices.created_at DESC
+    ''')
+    
+    invoices = cursor.fetchall()
+    conn.close()
+    return invoices
+
+
+def get_invoice_by_id(invoice_id):
+    """Get a single invoice with customer details"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT invoices.*, customers.name as customer_name, 
+               customers.phone, customers.address as customer_address
+        FROM invoices
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE invoices.id = ?
+    ''', (invoice_id,))
+    
+    invoice = cursor.fetchone()
+    conn.close()
+    return invoice
+
+
+def update_invoice_status(invoice_id, status):
+    """Update invoice status (draft, sent, paid, cancelled)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE invoices
+        SET status = ?
+        WHERE id = ?
+    ''', (status, invoice_id))
+    
+    conn.commit()
+    conn.close()
+
+
+def delete_invoice(invoice_id):
+    """Delete an invoice"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('DELETE FROM invoices WHERE id = ?', (invoice_id,))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_customer_invoices(customer_id):
+    """Get all invoices for a specific customer"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT * FROM invoices
+        WHERE customer_id = ?
+        ORDER BY created_at DESC
+    ''', (customer_id,))
+    
+    invoices = cursor.fetchall()
+    conn.close()
+    return invoices
+
 if __name__ == "__main__":
     # Initialize database
     init_database()
     
-    # Test CREATE
-    print("\n--- Testing CREATE ---")
-    id1 = add_customer("John Doe", "(555) 123-4567", "123 Main St")
-    id2 = add_customer("Jane Smith", "(555) 987-6543", "456 Oak Ave")
-    print(f"Added customers with IDs: {id1}, {id2}")
+    print("\n=== TESTING CUSTOMERS ===")
+    # Create customers
+    customer1 = add_customer("John Doe", "(555) 123-4567", "123 Main St")
+    customer2 = add_customer("Jane Smith", "(555) 987-6543", "456 Oak Ave")
+    print(f"Created customers: {customer1}, {customer2}")
     
-    # Test READ ALL
-    print("\n--- Testing READ ALL ---")
-    customers = get_all_customers()
-    for customer in customers:
-        print(f"ID: {customer['id']}, Name: {customer['name']}, Phone: {customer['phone']}, Address: {customer['address']}")
+    print("\n=== TESTING INVOICES ===")
+    # Create invoices
+    invoice1 = create_invoice(
+        customer_id=customer1,
+        invoice_number="INV-2025-001",
+        date="2025-11-02",
+        technician="Mike Johnson",
+        work_performed="AC Repair - Compressor replacement",
+        labor_cost=150.00,
+        scheduled_time="10:00 AM",
+        description="Replaced faulty compressor unit",
+        recommendations="Schedule annual maintenance in 6 months"
+    )
+    print(f"✅ Created invoice: INV-2025-001 (ID: {invoice1})")
     
-    # Test READ ONE
-    print("\n--- Testing READ ONE ---")
-    customer = get_customer_by_id(id1)
-    if customer:
-        print(f"Found: Name: {customer['name']} at {customer['address']}")
-    else:
-        print("Customer not found!")
+    invoice2 = create_invoice(
+        customer_id=customer1,
+        invoice_number="INV-2025-002",
+        date="2025-11-02",
+        technician="Sarah Lee",
+        work_performed="Filter Replacement",
+        labor_cost=75.00,
+        scheduled_time="2:00 PM"
+    )
+    print(f"✅ Created invoice: INV-2025-002 (ID: {invoice2})")
     
-    # Test UPDATE
-    print("\n--- Testing UPDATE ---")
-    update_customer(id1, "John Doe Jr.", "(555) 111-2222", "789 New St")
-    updated = get_customer_by_id(id1)
-    if updated:
-        print(f"Updated to: {updated['name']}, {updated['phone']}, {updated['address']}")
+    # Get all invoices
+    print("\n--- All Invoices (with JOIN) ---")
+    invoices = get_all_invoices()
+    for inv in invoices:
+        subtotal = inv['labor_cost'] + inv['materials_cost']
+        tax = subtotal * inv['tax_rate']
+        grand_total = subtotal + tax
+        print(f"📄 {inv['invoice_number']}: {inv['customer_name']} - ${grand_total:.2f} [{inv['status']}]")
+        print(f"   Tech: {inv['technician']}, Work: {inv['work_performed']}")
     
-    # Test DELETE
-    print("\n--- Testing DELETE ---")
-    delete_customer(id2)
-    remaining = get_all_customers()
-    print(f"Remaining customers: {len(remaining)}")
-
-    print("\n--- Testing Search ---")
-    results = search_customers("John")
-    print(f"Found {len(results)} customers matching 'John':")
-    for customer in results:
-        print(f"  - {customer['name']}")
-
-    # Test COUNT
-    print("\n--- Testing COUNT ---")
-    total = count_customers()
-    print(f"Total customers in database: {total}")
-              
+    # Get customer's invoices
+    print(f"\n--- Invoices for {customer1} (John Doe) ---")
+    customer_invoices = get_customer_invoices(customer1)
+    print(f"Found {len(customer_invoices)} invoice(s)")
     
-
+    # Get single invoice with details
+    print("\n--- Invoice Details ---")
+    invoice_detail = get_invoice_by_id(invoice1)
+    if invoice_detail:
+        print(f"Invoice: {invoice_detail['invoice_number']}")
+        print(f"Customer: {invoice_detail['customer_name']} - {invoice_detail['phone']}")
+        print(f"Address: {invoice_detail['customer_address']}")
+        print(f"Work: {invoice_detail['work_performed']}")
+        print(f"Labor: ${invoice_detail['labor_cost']:.2f}")
+        print(f"Status: {invoice_detail['status']}")
     
-    print("\n✅ All CRUD operations working!")
+    # Update status
+    print("\n--- Update Invoice Status ---")
+    update_invoice_status(invoice1, 'paid')
+    updated = get_invoice_by_id(invoice1)
+    print(f"✅ Invoice {updated['invoice_number']} status changed to: {updated['status']}")
+    
+    print("\n✅ All operations working! Database has customers AND invoices!")

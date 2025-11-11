@@ -82,7 +82,7 @@ def get_customer_by_id(customer_id):
     conn.close()
     return customer
 
-def update_customer(customer_id, name, phone, address):
+def update_customer(customer_id, name, phone, address, none):
     """Update customer details"""
     conn = get_db_connection()
     cursor = conn.cursor()

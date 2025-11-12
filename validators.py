@@ -159,4 +159,61 @@ def validate_appointment_status(status):
     valid_statuses = ['scheduled', 'in-progress', 'completed', 'cancelled']
     if status not in valid_statuses:
         return False, f"Status must be one of: {', '.join(valid_statuses)}"
-    return True, Non
+    return True, None
+
+
+def validate_inventory_id(inventory_id):
+    """Check if inventory item exists"""
+    if not inventory_id:
+        return False, "Inventory ID is required"
+    
+    try:
+        inventory_id = int(inventory_id)
+    except (ValueError, TypeError):
+        return False, "Inventory ID must be a valid integer"
+    
+    # Check database
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('SELECT * FROM inventory WHERE id = ?', (inventory_id,))
+        item = cursor.fetchone()
+        conn.close()
+        
+        if not item:
+            return False, f"Inventory item with ID {inventory_id} not found"
+        
+        return True, item
+    except:
+        conn.close()
+        return False, f"Inventory item with ID {inventory_id} not found"
+
+
+def validate_category(category):
+    """Validate inventory category"""
+    if not category:
+        return False, "Category is required"
+    
+    valid_categories = ['parts', 'tools', 'refrigerant', 'supplies', 'equipment', 'other']
+    category_lower = category.lower()
+    
+    if category_lower not in valid_categories:
+        return False, f"Category must be one of: {', '.join(valid_categories)}"
+    
+    return True, category_lower
+
+
+def validate_unit(unit):
+    """Validate unit of measurement"""
+    if not unit:
+        return False, "Unit is required"
+    
+    valid_units = ['ea', 'lbs', 'oz', 'gal', 'ft', 'box', 'case', 'roll', 'set']
+    unit_lower = unit.lower()
+    
+    if unit_lower not in valid_units:
+        return False, f"Unit must be one of: {', '.join(valid_units)}"
+    
+    return True, unit_lower

@@ -2,7 +2,9 @@
 
 Production-ready REST API for HVAC business management, currently managing real-world operations.
 
-🔗 **Live API:** [Add your Render URL here after deploy]
+🔗 **Live API:** https://hvac-management-api.onrender.com
+
+
 
 ## 🎯 Overview
 Built for a real HVAC business to manage customers, scheduling, invoicing, and inventory. Handles daily operations including appointment tracking, parts usage, and automated calculations.

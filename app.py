@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from models.customer import db, Customers 
 import re
+from models.appointments import Appointments
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///customers.db'  
@@ -10,6 +11,8 @@ db.init_app(app)
 # create db 
 with app.app_context():
     db.create_all()
+    with app.app_context():
+        db.create_all() #now creates appointments
 
 # phone validation 
 def validate_phone(phone):
@@ -18,7 +21,7 @@ def validate_phone(phone):
 # get all 
 @app.route('/customers', methods=['GET'])
 def get_customers():
-    customers = Customers.query.all()  
+    customers = Customers.query.all()
     return jsonify([c.to_dict() for c in customers]), 200 
 
 # post
@@ -61,6 +64,23 @@ def delete_customer(customer_id):
     db.session.delete(c)
     db.session.commit()
     return '', 204
+
+@app.route('/appointments', methods=['GET'])
+def get_appointments():
+    appointments = Appointments.query.all()
+    return jsonify([a.to_dict() for a in appointments]), 200
+
+@app.route('/appointments', methods=['POST'])
+def create_appointment():
+    data = request.get_json()
+    required = ['customer_id', 'date', 'time', 'service_type']
+    if not all(k in data for k in required):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    appointment = Appointments(**data)
+    db.session.add(appointment)
+    db.session.commit()
+    return jsonify(appointment.to_dict()), 201
 
 if __name__ == '__main__':
     app.run(debug=True , port=5002)

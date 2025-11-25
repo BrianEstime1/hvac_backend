@@ -901,8 +901,8 @@ def api_create_inventory_item():
         if not is_valid:
             return jsonify({'error': category}), 400
         
-        # Validate unit (default to 'each' if not provided)
-        unit_value = data.get('unit', 'each')
+        # Validate unit (default to 'ea' if not provided)
+        unit_value = data.get('unit', 'ea')
         is_valid, unit = validate_unit(unit_value)
         if not is_valid:
             return jsonify({'error': unit}), 400

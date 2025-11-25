@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import sqlite3
 from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
@@ -27,6 +28,16 @@ from validators import (
 )
 
 app = Flask(__name__)
+
+# CORS Configuration - Allow Vercel frontend
+CORS(app, origins=[
+    'https://hvac-frontend-eight.vercel.app',
+    'https://hvac-frontend-git-main-brianestime1s-projects.vercel.app',
+    'https://hvac-frontend-skxykklys-brianestime1s-projects.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000'
+], supports_credentials=True)
+
 init_database()
 
 

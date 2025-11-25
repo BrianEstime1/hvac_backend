@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import sqlite3
+from datetime import datetime
 from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
@@ -41,9 +42,32 @@ CORS(app, origins=[
 init_database()
 
 
+# ==================== DASHBOARD ENDPOINT ====================
+
+@app.route('/api/dashboard/stats', methods=['GET'])
+def api_get_dashboard_stats():
+    """Get dashboard statistics"""
+    try:
+        customers = get_all_customers()
+        appointments = get_all_appointments()
+        low_stock = get_low_stock_items()
+        
+        # Get upcoming appointments (today and future)
+        today = datetime.now().date().isoformat()
+        upcoming_appointments = [apt for apt in appointments if apt['appointment_date'] >= today and apt['status'] == 'scheduled']
+        
+        return jsonify({
+            'total_customers': len(customers),
+            'upcoming_appointments': len(upcoming_appointments),
+            'low_stock_items': len(low_stock)
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve stats: {str(e)}'}), 500
+
+
 # ==================== CUSTOMER ENDPOINTS ====================
 
-@app.route('/customers', methods=['GET'])
+@app.route('/api/customers', methods=['GET'])
 def api_get_customers():
     """Get all customers"""
     try:
@@ -54,7 +78,7 @@ def api_get_customers():
         return jsonify({'error': f'Failed to retrieve customers: {str(e)}'}), 500
 
 
-@app.route('/customers/<int:customer_id>', methods=['GET'])
+@app.route('/api/customers/<int:customer_id>', methods=['GET'])
 def api_get_customer(customer_id):
     """Get single customer by ID"""
     try:
@@ -66,7 +90,7 @@ def api_get_customer(customer_id):
         return jsonify({'error': f'Failed to retrieve customer: {str(e)}'}), 500
 
 
-@app.route('/customers', methods=['POST'])
+@app.route('/api/customers', methods=['POST'])
 def api_create_customer():
     """Create new customer"""
     try:
@@ -103,7 +127,7 @@ def api_create_customer():
         return jsonify({'error': f'Failed to create customer: {str(e)}'}), 500
 
 
-@app.route('/customers/<int:customer_id>', methods=['PUT'])
+@app.route('/api/customers/<int:customer_id>', methods=['PUT'])
 def api_update_customer(customer_id):
     """Update existing customer"""
     try:
@@ -143,7 +167,7 @@ def api_update_customer(customer_id):
         return jsonify({'error': f'Failed to update customer: {str(e)}'}), 500
 
 
-@app.route('/customers/<int:customer_id>', methods=['DELETE'])
+@app.route('/api/customers/<int:customer_id>', methods=['DELETE'])
 def api_delete_customer(customer_id):
     """Delete customer (only if no invoices)"""
     try:
@@ -168,7 +192,7 @@ def api_delete_customer(customer_id):
         return jsonify({'error': f'Failed to delete customer: {str(e)}'}), 500
 
 
-@app.route('/customers/<int:customer_id>/invoices', methods=['GET'])
+@app.route('/api/customers/<int:customer_id>/invoices', methods=['GET'])
 def api_get_customer_invoices(customer_id):
     """Get all invoices for a customer"""
     try:
@@ -206,7 +230,7 @@ def api_get_customer_invoices(customer_id):
 
 # ==================== INVOICE ENDPOINTS ====================
 
-@app.route('/invoices', methods=['GET'])
+@app.route('/api/invoices', methods=['GET'])
 def api_get_invoices():
     """Get all invoices"""
     try:
@@ -243,7 +267,7 @@ def api_get_invoices():
         return jsonify({'error': f'Failed to retrieve invoices: {str(e)}'}), 500
 
 
-@app.route('/invoices/<int:invoice_id>', methods=['GET'])
+@app.route('/api/invoices/<int:invoice_id>', methods=['GET'])
 def api_get_invoice(invoice_id):
     """Get single invoice"""
     try:
@@ -286,7 +310,7 @@ def api_get_invoice(invoice_id):
         return jsonify({'error': f'Failed to retrieve invoice: {str(e)}'}), 500
 
 
-@app.route('/invoices', methods=['POST'])
+@app.route('/api/invoices', methods=['POST'])
 def api_create_invoice():
     """Create new invoice"""
     try:
@@ -341,7 +365,7 @@ def api_create_invoice():
         return jsonify({'error': f'Failed to create invoice: {str(e)}'}), 500
 
 
-@app.route('/invoices/<int:invoice_id>', methods=['PUT'])
+@app.route('/api/invoices/<int:invoice_id>', methods=['PUT'])
 def api_update_invoice(invoice_id):
     """Update invoice"""
     try:
@@ -409,7 +433,7 @@ def api_update_invoice(invoice_id):
         return jsonify({'error': f'Failed to update invoice: {str(e)}'}), 500
 
 
-@app.route('/invoices/<int:invoice_id>', methods=['DELETE'])
+@app.route('/api/invoices/<int:invoice_id>', methods=['DELETE'])
 def api_delete_invoice(invoice_id):
     """Delete invoice"""
     try:
@@ -429,7 +453,7 @@ def api_delete_invoice(invoice_id):
         return jsonify({'error': f'Failed to delete invoice: {str(e)}'}), 500
 
 
-@app.route('/invoices/<int:invoice_id>/status', methods=['PUT'])
+@app.route('/api/invoices/<int:invoice_id>/status', methods=['PUT'])
 def api_update_invoice_status(invoice_id):
     """Update invoice status"""
     try:
@@ -462,7 +486,7 @@ def api_update_invoice_status(invoice_id):
 
 # ==================== APPOINTMENT ENDPOINTS ====================
 
-@app.route('/appointments', methods=['GET'])
+@app.route('/api/appointments', methods=['GET'])
 def api_get_appointments():
     """Get all appointments"""
     try:
@@ -492,7 +516,7 @@ def api_get_appointments():
         return jsonify({'error': f'Failed to retrieve appointments: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>', methods=['GET'])
+@app.route('/api/appointments/<int:appointment_id>', methods=['GET'])
 def api_get_appointment(appointment_id):
     """Get single appointment"""
     try:
@@ -522,7 +546,7 @@ def api_get_appointment(appointment_id):
         return jsonify({'error': f'Failed to retrieve appointment: {str(e)}'}), 500
 
 
-@app.route('/appointments', methods=['POST'])
+@app.route('/api/appointments', methods=['POST'])
 def api_create_appointment():
     """Create new appointment"""
     try:
@@ -569,7 +593,7 @@ def api_create_appointment():
         return jsonify({'error': f'Failed to create appointment: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>', methods=['PUT'])
+@app.route('/api/appointments/<int:appointment_id>', methods=['PUT'])
 def api_update_appointment(appointment_id):
     """Update appointment"""
     try:
@@ -614,7 +638,7 @@ def api_update_appointment(appointment_id):
         return jsonify({'error': f'Failed to update appointment: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>', methods=['DELETE'])
+@app.route('/api/appointments/<int:appointment_id>', methods=['DELETE'])
 def api_delete_appointment(appointment_id):
     """Delete appointment"""
     try:
@@ -633,7 +657,7 @@ def api_delete_appointment(appointment_id):
         return jsonify({'error': f'Failed to delete appointment: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>/status', methods=['PUT'])
+@app.route('/api/appointments/<int:appointment_id>/status', methods=['PUT'])
 def api_update_appointment_status(appointment_id):
     """Update appointment status"""
     try:
@@ -662,7 +686,7 @@ def api_update_appointment_status(appointment_id):
         return jsonify({'error': f'Failed to update status: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>/link-invoice', methods=['PUT'])
+@app.route('/api/appointments/<int:appointment_id>/link-invoice', methods=['PUT'])
 def api_link_appointment_to_invoice(appointment_id):
     """Link appointment to invoice (marks as completed)"""
     try:
@@ -696,7 +720,7 @@ def api_link_appointment_to_invoice(appointment_id):
         return jsonify({'error': f'Failed to link appointment: {str(e)}'}), 500
 
 
-@app.route('/customers/<int:customer_id>/appointments', methods=['GET'])
+@app.route('/api/customers/<int:customer_id>/appointments', methods=['GET'])
 def api_get_customer_appointments(customer_id):
     """Get all appointments for a customer"""
     try:
@@ -728,7 +752,7 @@ def api_get_customer_appointments(customer_id):
         return jsonify({'error': f'Failed to retrieve appointments: {str(e)}'}), 500
 
 
-@app.route('/appointments/date/<date>', methods=['GET'])
+@app.route('/api/appointments/date/<date>', methods=['GET'])
 def api_get_appointments_by_date(date):
     """Get all appointments for a specific date"""
     try:
@@ -761,7 +785,7 @@ def api_get_appointments_by_date(date):
         return jsonify({'error': f'Failed to retrieve appointments: {str(e)}'}), 500
 
 
-@app.route('/appointments/technician/<technician>', methods=['GET'])
+@app.route('/api/appointments/technician/<technician>', methods=['GET'])
 def api_get_appointments_by_technician(technician):
     """Get all appointments for a specific technician"""
     try:
@@ -791,7 +815,7 @@ def api_get_appointments_by_technician(technician):
 
 # ==================== INVENTORY ENDPOINTS ====================
 
-@app.route('/inventory', methods=['GET'])
+@app.route('/api/inventory', methods=['GET'])
 def api_get_inventory():
     """Get all inventory items"""
     try:
@@ -824,7 +848,7 @@ def api_get_inventory():
         return jsonify({'error': f'Failed to retrieve inventory: {str(e)}'}), 500
 
 
-@app.route('/inventory/<int:item_id>', methods=['GET'])
+@app.route('/api/inventory/<int:item_id>', methods=['GET'])
 def api_get_inventory_item(item_id):
     """Get single inventory item"""
     try:
@@ -855,7 +879,7 @@ def api_get_inventory_item(item_id):
         return jsonify({'error': f'Failed to retrieve item: {str(e)}'}), 500
 
 
-@app.route('/inventory', methods=['POST'])
+@app.route('/api/inventory', methods=['POST'])
 def api_create_inventory_item():
     """Create new inventory item"""
     try:
@@ -921,7 +945,7 @@ def api_create_inventory_item():
         return jsonify({'error': f'Failed to create item: {str(e)}'}), 500
 
 
-@app.route('/inventory/<int:item_id>', methods=['PUT'])
+@app.route('/api/inventory/<int:item_id>', methods=['PUT'])
 def api_update_inventory_item(item_id):
     """Update inventory item"""
     try:
@@ -991,7 +1015,7 @@ def api_update_inventory_item(item_id):
         return jsonify({'error': f'Failed to update item: {str(e)}'}), 500
 
 
-@app.route('/inventory/<int:item_id>', methods=['DELETE'])
+@app.route('/api/inventory/<int:item_id>', methods=['DELETE'])
 def api_delete_inventory_item(item_id):
     """Delete inventory item"""
     try:
@@ -1010,7 +1034,7 @@ def api_delete_inventory_item(item_id):
         return jsonify({'error': f'Failed to delete item: {str(e)}'}), 500
 
 
-@app.route('/inventory/<int:item_id>/adjust', methods=['PUT'])
+@app.route('/api/inventory/<int:item_id>/adjust', methods=['PUT'])
 def api_adjust_inventory(item_id):
     """Adjust inventory quantity (add or subtract)"""
     try:
@@ -1051,7 +1075,7 @@ def api_adjust_inventory(item_id):
         return jsonify({'error': f'Failed to adjust inventory: {str(e)}'}), 500
 
 
-@app.route('/inventory/low-stock', methods=['GET'])
+@app.route('/api/inventory/low-stock', methods=['GET'])
 def api_get_low_stock():
     """Get items below low stock threshold"""
     try:
@@ -1079,7 +1103,7 @@ def api_get_low_stock():
         return jsonify({'error': f'Failed to retrieve low stock items: {str(e)}'}), 500
 
 
-@app.route('/inventory/category/<category>', methods=['GET'])
+@app.route('/api/inventory/category/<category>', methods=['GET'])
 def api_get_inventory_by_category(category):
     """Get all items in a category"""
     try:
@@ -1111,7 +1135,7 @@ def api_get_inventory_by_category(category):
         return jsonify({'error': f'Failed to retrieve items: {str(e)}'}), 500
 
 
-@app.route('/inventory/search', methods=['GET'])
+@app.route('/api/inventory/search', methods=['GET'])
 def api_search_inventory():
     """Search inventory by name or SKU"""
     try:
@@ -1142,7 +1166,7 @@ def api_search_inventory():
         return jsonify({'error': f'Failed to search inventory: {str(e)}'}), 500
 
 
-@app.route('/inventory/value', methods=['GET'])
+@app.route('/api/inventory/value', methods=['GET'])
 def api_get_inventory_value():
     """Get total inventory value"""
     try:
@@ -1158,7 +1182,7 @@ def api_get_inventory_value():
 
 # ==================== INVENTORY USAGE ENDPOINTS ====================
 
-@app.route('/inventory/usage', methods=['POST'])
+@app.route('/api/inventory/usage', methods=['POST'])
 def api_record_usage():
     """Record parts used on a job"""
     try:
@@ -1210,7 +1234,7 @@ def api_record_usage():
         return jsonify({'error': f'Failed to record usage: {str(e)}'}), 500
 
 
-@app.route('/appointments/<int:appointment_id>/inventory-usage', methods=['GET'])
+@app.route('/api/appointments/<int:appointment_id>/inventory-usage', methods=['GET'])
 def api_get_appointment_usage(appointment_id):
     """Get all parts used for an appointment"""
     try:
@@ -1251,7 +1275,7 @@ def api_get_appointment_usage(appointment_id):
         return jsonify({'error': f'Failed to retrieve usage: {str(e)}'}), 500
 
 
-@app.route('/invoices/<int:invoice_id>/inventory-usage', methods=['GET'])
+@app.route('/api/invoices/<int:invoice_id>/inventory-usage', methods=['GET'])
 def api_get_invoice_usage(invoice_id):
     """Get all parts used for an invoice"""
     try:
@@ -1292,7 +1316,7 @@ def api_get_invoice_usage(invoice_id):
         return jsonify({'error': f'Failed to retrieve usage: {str(e)}'}), 500
 
 
-@app.route('/inventory/<int:item_id>/usage-history', methods=['GET'])
+@app.route('/api/inventory/<int:item_id>/usage-history', methods=['GET'])
 def api_get_item_usage_history(item_id):
     """Get usage history for an inventory item"""
     try:

@@ -555,7 +555,7 @@ def api_create_appointment():
             return jsonify({'error': 'Invalid JSON'}), 400
         
         # Validate required fields
-        required = ['customer_id', 'appointment_date', 'appointment_time', 'service_type']
+        required = ['customer_id', 'appointment_date', 'appointment_time']
         is_valid, error = validate_required_fields(data, required)
         if not is_valid:
             return jsonify({'error': error}), 400
@@ -575,11 +575,14 @@ def api_create_appointment():
         if not is_valid:
             return jsonify({'error': time_result}), 400
         
+        # Use description as service_type if service_type not provided
+        service_type = data.get('service_type') or data.get('notes') or 'Service Call'
+        
         appointment_id = create_appointment(
             customer_id=data.get('customer_id'),
             appointment_date=date_result,
             appointment_time=time_result,
-            service_type=data.get('service_type'),
+            service_type=service_type,
             technician=data.get('technician', ''),
             notes=data.get('notes', '')
         )
@@ -888,7 +891,7 @@ def api_create_inventory_item():
             return jsonify({'error': 'Invalid JSON'}), 400
         
         # Validate required fields
-        required = ['name', 'category', 'unit']
+        required = ['name', 'category']
         is_valid, error = validate_required_fields(data, required)
         if not is_valid:
             return jsonify({'error': error}), 400
@@ -898,8 +901,9 @@ def api_create_inventory_item():
         if not is_valid:
             return jsonify({'error': category}), 400
         
-        # Validate unit
-        is_valid, unit = validate_unit(data.get('unit'))
+        # Validate unit (default to 'each' if not provided)
+        unit_value = data.get('unit', 'each')
+        is_valid, unit = validate_unit(unit_value)
         if not is_valid:
             return jsonify({'error': unit}), 400
         

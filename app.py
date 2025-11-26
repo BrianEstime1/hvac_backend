@@ -56,10 +56,13 @@ def api_get_dashboard_stats():
         today = datetime.now().date().isoformat()
         upcoming_appointments = [apt for apt in appointments if apt['appointment_date'] >= today and apt['status'] == 'scheduled']
         
+        # Convert low_stock items to dictionaries
+        low_stock_list = [dict(item) for item in low_stock]
+        
         return jsonify({
             'total_customers': len(customers),
             'upcoming_appointments': len(upcoming_appointments),
-            'low_stock_items': len(low_stock)
+            'low_stock_items': low_stock_list
         })
     except Exception as e:
         return jsonify({'error': f'Failed to retrieve stats: {str(e)}'}), 500

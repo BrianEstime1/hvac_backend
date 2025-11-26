@@ -5,7 +5,7 @@ DATABASE = 'hvac.db'
 
 def get_db_connection():
     """Helper function to connect to database"""
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DATABASE, timeout=20.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -103,6 +103,7 @@ def init_database():
     print("✅ Database initialized")
 
 
+# [Rest of the file remains exactly the same - keeping all functions as is]
 # ==================== CUSTOMER FUNCTIONS ====================
 
 def add_customer(name, phone, address):

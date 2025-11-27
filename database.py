@@ -101,6 +101,9 @@ def init_database():
         )
     ''')
 
+    # Clean up legacy blank SKUs that could violate uniqueness
+    cursor.execute("DELETE FROM inventory WHERE sku = ''")
+
     conn.commit()
     conn.close()
     print("✅ Database initialized")
@@ -507,11 +510,16 @@ def get_appointments_by_technician(technician):
 
 # ==================== INVENTORY FUNCTIONS ====================
 
-def create_inventory_item(name, category, unit, sku="", quantity=0, cost_per_unit=0, 
+def create_inventory_item(name, category, unit, sku="", quantity=0, cost_per_unit=0,
                           low_stock_threshold=5, supplier="", notes=""):
     """Create a new inventory item"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Allow multiple items without a SKU by storing NULL instead of an empty string
+    normalized_sku = sku.strip() if sku else None
+    if normalized_sku == "":
+        normalized_sku = None
     
     cursor.execute('''
         INSERT INTO inventory (
@@ -519,7 +527,7 @@ def create_inventory_item(name, category, unit, sku="", quantity=0, cost_per_uni
             low_stock_threshold, supplier, notes
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (name, category, sku, quantity, unit, cost_per_unit,
+    ''', (name, category, normalized_sku, quantity, unit, cost_per_unit,
           low_stock_threshold, supplier, notes))
     
     conn.commit()
@@ -559,13 +567,17 @@ def update_inventory_item(item_id, name, category, unit, sku="", quantity=0,
     """Update inventory item"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    normalized_sku = sku.strip() if sku else None
+    if normalized_sku == "":
+        normalized_sku = None
     
     cursor.execute('''
         UPDATE inventory
         SET name = ?, category = ?, sku = ?, quantity = ?, unit = ?,
             cost_per_unit = ?, low_stock_threshold = ?, supplier = ?, notes = ?
         WHERE id = ?
-    ''', (name, category, sku, quantity, unit, cost_per_unit,
+    ''', (name, category, normalized_sku, quantity, unit, cost_per_unit,
           low_stock_threshold, supplier, notes, item_id))
     
     conn.commit()
@@ -609,13 +621,26 @@ def delete_inventory_item(item_id):
     """Delete inventory item"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute('DELETE FROM inventory WHERE id = ?', (item_id,))
     
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()
     return rows_affected > 0
+
+
+def cleanup_inventory_empty_skus():
+    """Delete legacy inventory rows that stored blank SKU strings."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM inventory WHERE sku = ''")
+
+    conn.commit()
+    removed = cursor.rowcount
+    conn.close()
+    return removed
 
 
 def get_low_stock_items():

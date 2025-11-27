@@ -899,8 +899,9 @@ def api_create_inventory_item():
         if not is_valid:
             return jsonify({'error': error}), 400
         
-        # Validate category
-        is_valid, category = validate_category(data.get('category'))
+        # Normalize and validate category
+        raw_category = (data.get('category') or '').strip().lower()
+        is_valid, category = validate_category(raw_category)
         if not is_valid:
             return jsonify({'error': category}), 400
         
@@ -970,8 +971,9 @@ def api_update_inventory_item(item_id):
         if not is_valid:
             return jsonify({'error': error}), 400
         
-        # Validate category
-        is_valid, category = validate_category(data.get('category'))
+        # Normalize and validate category
+        raw_category = (data.get('category') or '').strip().lower()
+        is_valid, category = validate_category(raw_category)
         if not is_valid:
             return jsonify({'error': category}), 400
         
@@ -1114,8 +1116,9 @@ def api_get_low_stock():
 def api_get_inventory_by_category(category):
     """Get all items in a category"""
     try:
-        # Validate category
-        is_valid, validated_category = validate_category(category)
+        # Normalize and validate category from URL
+        raw_category = (category or '').strip().lower()
+        is_valid, validated_category = validate_category(raw_category)
         if not is_valid:
             return jsonify({'error': validated_category}), 400
         

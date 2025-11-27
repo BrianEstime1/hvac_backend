@@ -191,18 +191,20 @@ def validate_inventory_id(inventory_id):
         return False, f"Inventory item with ID {inventory_id} not found"
 
 
-def validate_category(category):
-    """Validate inventory category"""
-    if not category:
+def validate_category(value):
+    """Validate inventory category - case-insensitive and whitespace-tolerant"""
+    if value is None or value == '':
         return False, "Category is required"
     
-    valid_categories = ['parts', 'tools', 'refrigerant', 'supplies', 'equipment', 'other']
-    category_lower = category.lower()
+    # Normalize: trim whitespace and convert to lowercase
+    category = str(value).strip().lower()
     
-    if category_lower not in valid_categories:
+    valid_categories = ['parts', 'tools', 'refrigerant', 'supplies', 'equipment', 'other']
+    
+    if category not in valid_categories:
         return False, f"Category must be one of: {', '.join(valid_categories)}"
     
-    return True, category_lower
+    return True, category
 
 
 def validate_unit(unit):

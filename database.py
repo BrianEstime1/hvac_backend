@@ -53,6 +53,35 @@ def _convert_schema_sql(sql):
     return sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
 
 
+def _column_exists(cursor, table, column):
+    """Return True if the column exists on the table for the current backend."""
+    if USE_POSTGRES:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = %s AND column_name = %s
+            LIMIT 1
+            """,
+            (table, column),
+        )
+        return cursor.fetchone() is not None
+
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _add_column_if_missing(cursor, table, column, definition):
+    """Add a column only if it is missing, logging failures."""
+    try:
+        if _column_exists(cursor, table, column):
+            return
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except Exception:
+        logger.exception("Failed to ensure column %s on %s", column, table)
+        raise
+
+
 def describe_database_url(url=DATABASE_URL):
     """Return a redacted DATABASE_URL for logging without credentials."""
     if not url:
@@ -118,11 +147,32 @@ def init_database():
             labor_cost REAL DEFAULT 0,
             materials_cost REAL DEFAULT 0,
             tax_rate REAL DEFAULT 0.08,
+            subtotal REAL DEFAULT 0,
+            tax REAL DEFAULT 0,
+            total REAL DEFAULT 0,
             status TEXT DEFAULT 'draft',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )
     '''))
+
+    # Ensure legacy databases gain the derived columns
+    _add_column_if_missing(cursor, 'invoices', 'subtotal', 'REAL DEFAULT 0')
+    _add_column_if_missing(cursor, 'invoices', 'tax', 'REAL DEFAULT 0')
+    _add_column_if_missing(cursor, 'invoices', 'total', 'REAL DEFAULT 0')
+
+    # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
+    cursor.execute('''
+        UPDATE invoices
+        SET
+            subtotal = labor_cost + materials_cost,
+            tax = (labor_cost + materials_cost) * tax_rate,
+            total = (labor_cost + materials_cost) + ((labor_cost + materials_cost) * tax_rate)
+        WHERE subtotal IS NULL
+           OR tax IS NULL
+           OR total IS NULL
+           OR ((labor_cost + materials_cost) != 0 AND (subtotal = 0 OR total = 0 OR (tax_rate != 0 AND tax = 0)))
+    ''')
     
     # Create appointments table
     cursor.execute(_convert_schema_sql('''
@@ -283,24 +333,27 @@ def count_customers():
 
 # ==================== INVOICE FUNCTIONS ====================
 
-def create_invoice(customer_id, invoice_number, date, technician, work_performed, 
-                   labor_cost, scheduled_time="", description="", recommendations=""):
-    """Create a new invoice"""
+def create_invoice(customer_id, invoice_number, date, technician, work_performed,
+                   labor_cost, materials_cost=0, tax_rate=0.08,
+                   scheduled_time="", description="", recommendations=""):
+    """Create a new invoice and persist calculated totals"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    materials_cost = 0
-    tax_rate = 0.08
-    
+
+    subtotal = labor_cost + materials_cost
+    tax = subtotal * tax_rate
+    total = subtotal + tax
+
     invoice_id = _execute_insert(cursor, '''
         INSERT INTO invoices (
-            invoice_number, customer_id, date, scheduled_time, 
+            invoice_number, customer_id, date, scheduled_time,
             technician, work_performed, description, recommendations,
-            labor_cost, materials_cost, tax_rate
+            labor_cost, materials_cost, subtotal, tax_rate, tax, total
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (invoice_number, customer_id, date, scheduled_time, technician, 
-          work_performed, description, recommendations, labor_cost, materials_cost, tax_rate))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (invoice_number, customer_id, date, scheduled_time, technician,
+          work_performed, description, recommendations, labor_cost, materials_cost,
+          subtotal, tax_rate, tax, total))
     conn.commit()
     conn.close()
     return invoice_id
@@ -338,19 +391,26 @@ def get_invoice_by_id(invoice_id):
 
 
 def update_invoice(invoice_id, invoice_number, date, technician, work_performed,
-                   labor_cost, materials_cost, scheduled_time="", description="", 
+                   labor_cost, materials_cost, scheduled_time="", description="",
                    recommendations="", tax_rate=0.08):
     """Update an existing invoice"""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    subtotal = labor_cost + materials_cost
+    tax = subtotal * tax_rate
+    total = subtotal + tax
+
     cursor.execute('''
         UPDATE invoices
         SET invoice_number = ?, date = ?, scheduled_time = ?,
             technician = ?, work_performed = ?, description = ?,
-            recommendations = ?, labor_cost = ?, materials_cost = ?, tax_rate = ?
+            recommendations = ?, labor_cost = ?, materials_cost = ?,
+            subtotal = ?, tax_rate = ?, tax = ?, total = ?
         WHERE id = ?
     ''', (invoice_number, date, scheduled_time, technician, work_performed,
-          description, recommendations, labor_cost, materials_cost, tax_rate, invoice_id))
+          description, recommendations, labor_cost, materials_cost,
+          subtotal, tax_rate, tax, total, invoice_id))
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()

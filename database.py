@@ -1,6 +1,8 @@
+import logging
 import os
 import sqlite3
 from datetime import datetime
+from urllib.parse import urlparse
 
 try:
     import psycopg2
@@ -16,6 +18,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 USE_POSTGRES = bool(DATABASE_URL)
+logger = logging.getLogger(__name__)
 
 if RealDictCursor:
     class PostgresCursor(RealDictCursor):
@@ -50,6 +53,18 @@ def _convert_schema_sql(sql):
     return sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
 
 
+def describe_database_url(url=DATABASE_URL):
+    """Return a redacted DATABASE_URL for logging without credentials."""
+    if not url:
+        return f"sqlite:///{DATABASE}"
+
+    parsed = urlparse(url)
+    user = parsed.username or "user"
+    host = parsed.hostname or "localhost"
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme}://{user}@{host}{port}{parsed.path}"
+
+
 def _execute_insert(cursor, query, params):
     """Run INSERT and return the new row id for either backend."""
     if USE_POSTGRES:
@@ -73,6 +88,7 @@ def _fetch_scalar(cursor):
 
 def init_database():
     """Initialize the database with required tables"""
+    logger.info("Initializing database schema using %s backend", "PostgreSQL" if USE_POSTGRES else "SQLite")
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -165,6 +181,7 @@ def init_database():
 
     conn.commit()
     conn.close()
+    logger.info("Database schema ready")
     print("✅ Database initialized")
 
 

@@ -1,3 +1,4 @@
+import logging
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import sqlite3
@@ -10,7 +11,7 @@ from database import (
     # Appointment functions
     create_appointment, get_all_appointments, get_appointment_by_id,
     update_appointment, update_appointment_status, delete_appointment,
-    get_customer_appointments, get_appointments_by_date, 
+    get_customer_appointments, get_appointments_by_date,
     get_appointments_by_technician, link_appointment_to_invoice,
     # Inventory functions
     create_inventory_item, get_all_inventory, get_inventory_by_id,
@@ -18,7 +19,7 @@ from database import (
     get_low_stock_items, get_inventory_by_category, search_inventory,
     calculate_total_inventory_value, record_inventory_usage,
     get_usage_by_appointment, get_usage_by_invoice, get_item_usage_history,
-    USE_POSTGRES
+    USE_POSTGRES, describe_database_url, get_db_connection
 )
 from validators import (
     validate_phone, validate_required_fields, validate_invoice_number,
@@ -36,6 +37,11 @@ except ImportError:
     DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 
 app = Flask(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # CORS Configuration - Allow Vercel frontend
 CORS(app, origins=[
@@ -48,6 +54,30 @@ CORS(app, origins=[
 
 database_backend = "PostgreSQL" if USE_POSTGRES else "SQLite"
 print(f"✅ Using {database_backend} database")
+
+
+def _log_database_configuration():
+    logger.info("Database backend selected: %s", database_backend)
+    if USE_POSTGRES:
+        logger.info("DATABASE_URL detected: %s", describe_database_url())
+    else:
+        logger.warning("DATABASE_URL not set; using local SQLite file hvac.db")
+
+
+def _check_database_connectivity():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1')
+        result = cursor.fetchone()
+        conn.close()
+        logger.info("Database connectivity check passed with result: %s", result)
+    except Exception:
+        logger.exception("Database connectivity check failed")
+
+
+_log_database_configuration()
+_check_database_connectivity()
 
 init_database()
 
@@ -606,6 +636,7 @@ def api_create_appointment():
         }), 201
     
     except Exception as e:
+        logger.exception("Failed to create appointment")
         return jsonify({'error': f'Failed to create appointment: {str(e)}'}), 500
 
 

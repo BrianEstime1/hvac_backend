@@ -2,11 +2,13 @@
 Validation functions for HVAC API
 All validators return (is_valid, result_or_error_message)
 """
+import logging
 import re
-import sqlite3
 from datetime import datetime
 
-DATABASE = 'hvac.db'
+from database import get_db_connection
+
+logger = logging.getLogger(__name__)
 
 def validate_phone(phone):
     """Validate and format phone number to (555) 123-4567 format"""
@@ -42,10 +44,9 @@ def validate_invoice_number(invoice_number, exclude_id=None):
     if not invoice_number:
         return False, "Invoice number is required"
     
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         if exclude_id:
             cursor.execute(
@@ -57,16 +58,17 @@ def validate_invoice_number(invoice_number, exclude_id=None):
                 'SELECT id FROM invoices WHERE invoice_number = ?',
                 (invoice_number,)
             )
-        
+
         exists = cursor.fetchone()
-        conn.close()
-        
+
         if exists:
             return False, f"Invoice number '{invoice_number}' already exists"
         return True, None
-    except:
+    except Exception:
+        logger.exception("Invoice number validation failed")
+        return False, "Error validating invoice number"
+    finally:
         conn.close()
-        return True, None  # If table doesn't exist yet, allow it
 
 
 def validate_numeric(value, field_name, min_value=0, allow_none=False):
@@ -102,23 +104,22 @@ def validate_customer_id(customer_id):
     except (ValueError, TypeError):
         return False, "Customer ID must be a valid integer"
     
-    # Check database
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute('SELECT * FROM customers WHERE id = ?', (customer_id,))
         customer = cursor.fetchone()
-        conn.close()
-        
+
         if not customer:
             return False, f"Customer with ID {customer_id} not found"
-        
+
         return True, customer
-    except:
-        conn.close()
+    except Exception:
+        logger.exception("Failed to validate customer ID %s", customer_id)
         return False, f"Customer with ID {customer_id} not found"
+    finally:
+        conn.close()
 
 
 def validate_date(date_string):
@@ -172,23 +173,22 @@ def validate_inventory_id(inventory_id):
     except (ValueError, TypeError):
         return False, "Inventory ID must be a valid integer"
     
-    # Check database
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute('SELECT * FROM inventory WHERE id = ?', (inventory_id,))
         item = cursor.fetchone()
-        conn.close()
-        
+
         if not item:
             return False, f"Inventory item with ID {inventory_id} not found"
-        
+
         return True, item
-    except:
-        conn.close()
+    except Exception:
+        logger.exception("Failed to validate inventory ID %s", inventory_id)
         return False, f"Inventory item with ID {inventory_id} not found"
+    finally:
+        conn.close()
 
 
 def validate_category(value):

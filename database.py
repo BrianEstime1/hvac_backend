@@ -1,10 +1,40 @@
+import os
 import sqlite3
 from datetime import datetime
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
+
 DATABASE = 'hvac.db'
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    # psycopg2 expects the postgresql prefix
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+USE_POSTGRES = bool(DATABASE_URL)
+
+if RealDictCursor:
+    class PostgresCursor(RealDictCursor):
+        """Cursor that mirrors sqlite's ? placeholders for Postgres."""
+
+        def execute(self, query, vars=None):
+            query = query.replace('?', '%s')
+            return super().execute(query, vars)
+else:
+    PostgresCursor = None
+
 
 def get_db_connection():
     """Helper function to connect to database"""
+    if USE_POSTGRES:
+        if not psycopg2:
+            raise RuntimeError("DATABASE_URL set but psycopg2 is not installed")
+        return psycopg2.connect(DATABASE_URL, cursor_factory=PostgresCursor)
+
     conn = sqlite3.connect(DATABASE, timeout=20.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     # Enable WAL mode for better concurrent access
@@ -12,13 +42,42 @@ def get_db_connection():
     conn.execute('PRAGMA busy_timeout=20000')
     return conn
 
+
+def _convert_schema_sql(sql):
+    """Adjust CREATE TABLE statements for Postgres compatibility."""
+    if not USE_POSTGRES:
+        return sql
+    return sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+
+
+def _execute_insert(cursor, query, params):
+    """Run INSERT and return the new row id for either backend."""
+    if USE_POSTGRES:
+        query = f"{query.strip()} RETURNING id"
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        return result['id'] if isinstance(result, dict) else result[0]
+
+    cursor.execute(query, params)
+    return cursor.lastrowid
+
+
+def _fetch_scalar(cursor):
+    """Fetch a single numeric value across sqlite/Postgres."""
+    row = cursor.fetchone()
+    if row is None:
+        return 0
+    if isinstance(row, dict):
+        return list(row.values())[0]
+    return row[0]
+
 def init_database():
     """Initialize the database with required tables"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     # Create customers table 
-    cursor.execute(''' 
+    cursor.execute(_convert_schema_sql(''' 
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -26,10 +85,10 @@ def init_database():
             address TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )  
-    ''')
+    '''))
 
     # Create invoices table
-    cursor.execute('''
+    cursor.execute(_convert_schema_sql('''
         CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_number TEXT NOT NULL UNIQUE,
@@ -47,10 +106,10 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )
-    ''')
+    '''))
     
     # Create appointments table
-    cursor.execute('''
+    cursor.execute(_convert_schema_sql('''
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer_id INTEGER NOT NULL,
@@ -65,10 +124,10 @@ def init_database():
             FOREIGN KEY (customer_id) REFERENCES customers(id),
             FOREIGN KEY (invoice_id) REFERENCES invoices(id)
         )
-    ''')
+    '''))
     
     # Create inventory table
-    cursor.execute('''
+    cursor.execute(_convert_schema_sql('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -82,10 +141,10 @@ def init_database():
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    '''))
     
     # Create inventory_usage table (track parts used on jobs)
-    cursor.execute('''
+    cursor.execute(_convert_schema_sql('''
         CREATE TABLE IF NOT EXISTS inventory_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             inventory_id INTEGER NOT NULL,
@@ -99,7 +158,7 @@ def init_database():
             FOREIGN KEY (appointment_id) REFERENCES appointments(id),
             FOREIGN KEY (invoice_id) REFERENCES invoices(id)
         )
-    ''')
+    '''))
 
     # Clean up legacy blank SKUs that could violate uniqueness
     cursor.execute("DELETE FROM inventory WHERE sku = ''")
@@ -116,12 +175,11 @@ def add_customer(name, phone, address):
     """Add a new customer to the database"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
+    customer_id = _execute_insert(cursor, '''
         INSERT INTO customers (name, phone, address)
         VALUES (?, ?, ?)
     ''', (name, phone, address))
     conn.commit()
-    customer_id = cursor.lastrowid
     conn.close()
     return customer_id
 
@@ -177,7 +235,7 @@ def check_customer_has_invoices(customer_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM invoices WHERE customer_id = ?', (customer_id,))
-    count = cursor.fetchone()[0]
+    count = _fetch_scalar(cursor)
     conn.close()
     return count > 0
 
@@ -201,7 +259,7 @@ def count_customers():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM customers')
-    count = cursor.fetchone()[0]
+    count = _fetch_scalar(cursor)
     conn.close()
     return count
 
@@ -217,7 +275,7 @@ def create_invoice(customer_id, invoice_number, date, technician, work_performed
     materials_cost = 0
     tax_rate = 0.08
     
-    cursor.execute('''
+    invoice_id = _execute_insert(cursor, '''
         INSERT INTO invoices (
             invoice_number, customer_id, date, scheduled_time, 
             technician, work_performed, description, recommendations,
@@ -226,9 +284,7 @@ def create_invoice(customer_id, invoice_number, date, technician, work_performed
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (invoice_number, customer_id, date, scheduled_time, technician, 
           work_performed, description, recommendations, labor_cost, materials_cost, tax_rate))
-    
     conn.commit()
-    invoice_id = cursor.lastrowid
     conn.close()
     return invoice_id
 
@@ -330,7 +386,7 @@ def create_appointment(customer_id, appointment_date, appointment_time,
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute('''
+    appointment_id = _execute_insert(cursor, '''
         INSERT INTO appointments (
             customer_id, appointment_date, appointment_time,
             technician, service_type, notes, status
@@ -340,7 +396,6 @@ def create_appointment(customer_id, appointment_date, appointment_time,
           technician, service_type, notes))
     
     conn.commit()
-    appointment_id = cursor.lastrowid
     conn.close()
     return appointment_id
 
@@ -521,7 +576,7 @@ def create_inventory_item(name, category, unit, sku="", quantity=0, cost_per_uni
     if normalized_sku == "":
         normalized_sku = None
     
-    cursor.execute('''
+    item_id = _execute_insert(cursor, '''
         INSERT INTO inventory (
             name, category, sku, quantity, unit, cost_per_unit,
             low_stock_threshold, supplier, notes
@@ -531,7 +586,6 @@ def create_inventory_item(name, category, unit, sku="", quantity=0, cost_per_uni
           low_stock_threshold, supplier, notes))
     
     conn.commit()
-    item_id = cursor.lastrowid
     conn.close()
     return item_id
 
@@ -727,7 +781,7 @@ def record_inventory_usage(inventory_id, quantity_used, date_used,
                    (new_quantity, inventory_id))
     
     # Record the usage
-    cursor.execute('''
+    usage_id = _execute_insert(cursor, '''
         INSERT INTO inventory_usage (
             inventory_id, appointment_id, invoice_id, 
             quantity_used, date_used, notes
@@ -737,7 +791,6 @@ def record_inventory_usage(inventory_id, quantity_used, date_used,
           quantity_used, date_used, notes))
     
     conn.commit()
-    usage_id = cursor.lastrowid
     conn.close()
     return usage_id
 

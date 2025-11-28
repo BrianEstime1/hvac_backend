@@ -17,7 +17,8 @@ from database import (
     update_inventory_item, adjust_inventory_quantity, delete_inventory_item,
     get_low_stock_items, get_inventory_by_category, search_inventory,
     calculate_total_inventory_value, record_inventory_usage,
-    get_usage_by_appointment, get_usage_by_invoice, get_item_usage_history
+    get_usage_by_appointment, get_usage_by_invoice, get_item_usage_history,
+    USE_POSTGRES
 )
 from validators import (
     validate_phone, validate_required_fields, validate_invoice_number,
@@ -27,6 +28,12 @@ from validators import (
     # Inventory validators
     validate_inventory_id, validate_category, validate_unit
 )
+
+try:
+    import psycopg2
+    DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg2.IntegrityError)
+except ImportError:
+    DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 
 app = Flask(__name__)
 
@@ -38,6 +45,9 @@ CORS(app, origins=[
     'http://localhost:5173',
     'http://localhost:3000'
 ], supports_credentials=True)
+
+database_backend = "PostgreSQL" if USE_POSTGRES else "SQLite"
+print(f"✅ Using {database_backend} database")
 
 init_database()
 
@@ -124,7 +134,7 @@ def api_create_customer():
             'phone': phone
         }), 201
     
-    except sqlite3.IntegrityError as e:
+    except DB_INTEGRITY_ERRORS as e:
         return jsonify({'error': f'Database error: {str(e)}'}), 409
     except Exception as e:
         return jsonify({'error': f'Failed to create customer: {str(e)}'}), 500
@@ -362,7 +372,7 @@ def api_create_invoice():
             'invoice_number': data.get('invoice_number')
         }), 201
     
-    except sqlite3.IntegrityError as e:
+    except DB_INTEGRITY_ERRORS as e:
         return jsonify({'error': f'Database error: {str(e)}'}), 409
     except Exception as e:
         return jsonify({'error': f'Failed to create invoice: {str(e)}'}), 500
@@ -430,7 +440,7 @@ def api_update_invoice(invoice_id):
             return jsonify({'message': 'Invoice updated successfully', 'id': invoice_id})
         return jsonify({'error': 'Failed to update invoice'}), 500
     
-    except sqlite3.IntegrityError as e:
+    except DB_INTEGRITY_ERRORS as e:
         return jsonify({'error': f'Database error: {str(e)}'}), 409
     except Exception as e:
         return jsonify({'error': f'Failed to update invoice: {str(e)}'}), 500
@@ -947,7 +957,7 @@ def api_create_inventory_item():
             'id': item_id
         }), 201
     
-    except sqlite3.IntegrityError as e:
+    except DB_INTEGRITY_ERRORS as e:
         return jsonify({'error': f'Database error (SKU may already exist): {str(e)}'}), 409
     except Exception as e:
         return jsonify({'error': f'Failed to create item: {str(e)}'}), 500
@@ -1018,7 +1028,7 @@ def api_update_inventory_item(item_id):
             return jsonify({'message': 'Inventory item updated successfully', 'id': item_id})
         return jsonify({'error': 'Failed to update item'}), 500
     
-    except sqlite3.IntegrityError as e:
+    except DB_INTEGRITY_ERRORS as e:
         return jsonify({'error': f'Database error (SKU may already exist): {str(e)}'}), 409
     except Exception as e:
         return jsonify({'error': f'Failed to update item: {str(e)}'}), 500

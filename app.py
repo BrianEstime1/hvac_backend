@@ -244,20 +244,16 @@ def api_get_customer_invoices(customer_id):
             return jsonify({'error': 'Customer not found'}), 404
         
         invoices = get_customer_invoices(customer_id)
-        
+
         invoice_list = []
         for invoice in invoices:
-            subtotal = invoice['labor_cost'] + invoice['materials_cost']
-            tax = subtotal * invoice['tax_rate']
-            total = subtotal + tax
-            
             invoice_list.append({
                 'id': invoice['id'],
                 'invoice_number': invoice['invoice_number'],
                 'date': invoice['date'],
                 'technician': invoice['technician'],
                 'work_performed': invoice['work_performed'],
-                'total': round(total, 2),
+                'total': invoice['total'],
                 'status': invoice['status']
             })
         
@@ -278,13 +274,9 @@ def api_get_invoices():
     """Get all invoices"""
     try:
         invoices = get_all_invoices()
-        
+
         invoice_list = []
         for invoice in invoices:
-            subtotal = invoice['labor_cost'] + invoice['materials_cost']
-            tax = subtotal * invoice['tax_rate']
-            total = subtotal + tax
-
             invoice_list.append({
                 'id': invoice['id'],
                 'invoice_number': invoice['invoice_number'],
@@ -297,9 +289,9 @@ def api_get_invoices():
                 'labor_cost': invoice['labor_cost'],
                 'materials_cost': invoice['materials_cost'],
                 'tax_rate': invoice['tax_rate'],
-                'subtotal': round(subtotal, 2),
-                'tax': round(tax, 2),
-                'total': round(total, 2),
+                'subtotal': invoice['subtotal'],
+                'tax': invoice['tax'],
+                'total': invoice['total'],
                 'status': invoice['status'],
                 'created_at': invoice['created_at']
             })
@@ -317,11 +309,7 @@ def api_get_invoice(invoice_id):
         invoice = get_invoice_by_id(invoice_id)
         if not invoice:
             return jsonify({'error': 'Invoice not found'}), 404
-        
-        subtotal = invoice['labor_cost'] + invoice['materials_cost']
-        tax = subtotal * invoice['tax_rate']
-        total = subtotal + tax
-        
+
         return jsonify({
             'id': invoice['id'],
             'invoice_number': invoice['invoice_number'],
@@ -340,10 +328,10 @@ def api_get_invoice(invoice_id):
             'costs': {
                 'labor': invoice['labor_cost'],
                 'materials': invoice['materials_cost'],
-                'subtotal': round(subtotal, 2),
+                'subtotal': invoice['subtotal'],
                 'tax_rate': invoice['tax_rate'],
-                'tax': round(tax, 2),
-                'total': round(total, 2)
+                'tax': invoice['tax'],
+                'total': invoice['total']
             },
             'status': invoice['status'],
             'created_at': invoice['created_at']
@@ -383,7 +371,21 @@ def api_create_invoice():
         )
         if not is_valid:
             return jsonify({'error': labor_cost}), 400
-        
+
+        # Validate materials cost
+        is_valid, materials_cost = validate_numeric(
+            data.get('materials_cost', 0), 'Materials cost', min_value=0, allow_none=True
+        )
+        if not is_valid:
+            return jsonify({'error': materials_cost}), 400
+
+        # Validate tax rate
+        is_valid, tax_rate = validate_numeric(
+            data.get('tax_rate', 0.08), 'Tax rate', min_value=0, allow_none=True
+        )
+        if not is_valid:
+            return jsonify({'error': tax_rate}), 400
+
         invoice_id = create_invoice(
             customer_id=data.get('customer_id'),
             invoice_number=data.get('invoice_number'),
@@ -391,6 +393,8 @@ def api_create_invoice():
             technician=data.get('technician'),
             work_performed=data.get('work_performed'),
             labor_cost=labor_cost,
+            materials_cost=materials_cost,
+            tax_rate=tax_rate,
             scheduled_time=data.get('scheduled_time', ''),
             description=data.get('description', ''),
             recommendations=data.get('recommendations', '')

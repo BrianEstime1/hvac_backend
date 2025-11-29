@@ -19,6 +19,9 @@ from database import (
     get_low_stock_items, get_inventory_by_category, search_inventory,
     calculate_total_inventory_value, record_inventory_usage,
     get_usage_by_appointment, get_usage_by_invoice, get_item_usage_history,
+    # Quote functions
+    create_quote, get_all_quotes, get_quote_by_id, update_quote,
+    delete_quote, check_quote_has_invoices,
     USE_POSTGRES, describe_database_url, get_db_connection
 )
 from validators import (
@@ -529,6 +532,193 @@ def api_update_invoice_status(invoice_id):
     
     except Exception as e:
         return jsonify({'error': f'Failed to update status: {str(e)}'}), 500
+
+
+# ==================== QUOTE ENDPOINTS ====================
+
+@app.route('/api/quotes', methods=['GET'])
+def api_get_quotes():
+    """Get all quotes"""
+    try:
+        quotes = get_all_quotes()
+        quote_list = []
+        for quote in quotes:
+            quote_list.append({
+                'id': quote['id'],
+                'customer_id': quote['customer_id'],
+                'customer_name': quote['customer_name'],
+                'title': quote['title'],
+                'description': quote['description'],
+                'total': quote['total'],
+                'status': quote['status'],
+                'created_at': quote['created_at'],
+                'updated_at': quote['updated_at']
+            })
+
+        return jsonify(quote_list)
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve quotes: {str(e)}'}), 500
+
+
+@app.route('/api/quotes/<int:quote_id>', methods=['GET'])
+def api_get_quote(quote_id):
+    """Get single quote"""
+    try:
+        quote = get_quote_by_id(quote_id)
+        if not quote:
+            return jsonify({'error': 'Quote not found'}), 404
+
+        return jsonify({
+            'id': quote['id'],
+            'customer': {
+                'id': quote['customer_id'],
+                'name': quote['customer_name']
+            },
+            'title': quote['title'],
+            'description': quote['description'],
+            'total': quote['total'],
+            'status': quote['status'],
+            'created_at': quote['created_at'],
+            'updated_at': quote['updated_at']
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve quote: {str(e)}'}), 500
+
+
+@app.route('/api/quotes', methods=['POST'])
+def api_create_quote():
+    """Create new quote"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+
+        # Validate required fields
+        is_valid, error = validate_required_fields(data, ['customer_id', 'title'])
+        if not is_valid:
+            return jsonify({'error': error}), 400
+
+        # Validate customer exists
+        is_valid, customer_result = validate_customer_id(data.get('customer_id'))
+        if not is_valid:
+            return jsonify({'error': customer_result}), 404
+
+        # Validate total
+        is_valid, total_value = validate_numeric(
+            data.get('total'), 'Total', min_value=0, allow_none=False
+        )
+        if not is_valid:
+            return jsonify({'error': total_value}), 400
+
+        # Validate status
+        status = data.get('status', 'draft') or 'draft'
+        valid_statuses = ['draft', 'sent', 'accepted', 'rejected']
+        is_valid, status_error = validate_status(status, valid_statuses)
+        if not is_valid:
+            return jsonify({'error': status_error}), 400
+
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
+
+        if not title:
+            return jsonify({'error': 'Title cannot be empty'}), 400
+
+        quote_id = create_quote(
+            customer_id=customer_result['id'],
+            title=title,
+            description=description,
+            total=total_value,
+            status=status
+        )
+
+        return jsonify({
+            'message': 'Quote created successfully',
+            'id': quote_id,
+            'status': status
+        }), 201
+
+    except DB_INTEGRITY_ERRORS as e:
+        return jsonify({'error': f'Database error: {str(e)}'}), 409
+    except Exception as e:
+        return jsonify({'error': f'Failed to create quote: {str(e)}'}), 500
+
+
+@app.route('/api/quotes/<int:quote_id>', methods=['PUT'])
+def api_update_quote(quote_id):
+    """Update quote"""
+    try:
+        quote = get_quote_by_id(quote_id)
+        if not quote:
+            return jsonify({'error': 'Quote not found'}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+
+        title = data.get('title', quote['title']).strip()
+        description = data.get('description', quote['description'] or '').strip()
+
+        # Validate total
+        total_input = data.get('total', quote['total'])
+        is_valid, total_value = validate_numeric(
+            total_input, 'Total', min_value=0, allow_none=False
+        )
+        if not is_valid:
+            return jsonify({'error': total_value}), 400
+
+        # Validate status
+        status = data.get('status', quote['status'])
+        valid_statuses = ['draft', 'sent', 'accepted', 'rejected']
+        is_valid, status_error = validate_status(status, valid_statuses)
+        if not is_valid:
+            return jsonify({'error': status_error}), 400
+
+        if not title:
+            return jsonify({'error': 'Title cannot be empty'}), 400
+
+        success = update_quote(
+            quote_id=quote_id,
+            title=title,
+            description=description,
+            total=total_value,
+            status=status
+        )
+
+        if success:
+            return jsonify({'message': 'Quote updated successfully', 'id': quote_id})
+        return jsonify({'error': 'Failed to update quote'}), 500
+
+    except DB_INTEGRITY_ERRORS as e:
+        return jsonify({'error': f'Database error: {str(e)}'}), 409
+    except Exception as e:
+        return jsonify({'error': f'Failed to update quote: {str(e)}'}), 500
+
+
+@app.route('/api/quotes/<int:quote_id>', methods=['DELETE'])
+def api_delete_quote(quote_id):
+    """Delete quote (only if no linked invoices)"""
+    try:
+        quote = get_quote_by_id(quote_id)
+        if not quote:
+            return jsonify({'error': 'Quote not found'}), 404
+
+        if check_quote_has_invoices(quote_id):
+            return jsonify({
+                'error': 'Cannot delete quote with existing invoices',
+                'suggestion': 'Remove or update linked invoices first'
+            }), 409
+
+        delete_quote(quote_id)
+
+        return jsonify({
+            'message': 'Quote deleted successfully',
+            'id': quote_id
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete quote: {str(e)}'}), 500
 
 
 # ==================== APPOINTMENT ENDPOINTS ====================

@@ -138,6 +138,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_number TEXT NOT NULL UNIQUE,
             customer_id INTEGER NOT NULL,
+            quote_id INTEGER,
             date TEXT NOT NULL,
             scheduled_time TEXT,
             technician TEXT,
@@ -156,10 +157,26 @@ def init_database():
         )
     '''))
 
+    # Create quotes table
+    cursor.execute(_convert_schema_sql('''
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            total REAL DEFAULT 0,
+            status TEXT DEFAULT 'draft',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_id) REFERENCES customers(id)
+        )
+    '''))
+
     # Ensure legacy databases gain the derived columns
     _add_column_if_missing(cursor, 'invoices', 'subtotal', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'tax', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'total', 'REAL DEFAULT 0')
+    _add_column_if_missing(cursor, 'invoices', 'quote_id', 'INTEGER')
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''
@@ -453,6 +470,89 @@ def get_customer_invoices(customer_id):
     invoices = cursor.fetchall()
     conn.close()
     return invoices
+
+
+# ==================== QUOTE FUNCTIONS ====================
+
+def create_quote(customer_id, title, description, total, status='draft'):
+    """Create a new quote"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    quote_id = _execute_insert(cursor, '''
+        INSERT INTO quotes (customer_id, title, description, total, status)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (customer_id, title, description, total, status))
+    conn.commit()
+    conn.close()
+    return quote_id
+
+
+def get_all_quotes():
+    """Get all quotes with customer names"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT quotes.*, customers.name as customer_name
+        FROM quotes
+        JOIN customers ON quotes.customer_id = customers.id
+        ORDER BY quotes.created_at DESC
+    ''')
+    quotes = cursor.fetchall()
+    conn.close()
+    return quotes
+
+
+def get_quote_by_id(quote_id):
+    """Get a single quote with customer details"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT quotes.*, customers.name as customer_name
+        FROM quotes
+        JOIN customers ON quotes.customer_id = customers.id
+        WHERE quotes.id = ?
+    ''', (quote_id,))
+    quote = cursor.fetchone()
+    conn.close()
+    return quote
+
+
+def update_quote(quote_id, title, description, total, status):
+    """Update an existing quote"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE quotes
+        SET title = ?, description = ?, total = ?, status = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ''', (title, description, total, status, quote_id))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+
+def delete_quote(quote_id):
+    """Delete a quote"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM quotes WHERE id = ?', (quote_id,))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+
+def check_quote_has_invoices(quote_id):
+    """Check if a quote is linked to any invoices"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM invoices WHERE quote_id = ?', (quote_id,))
+    count = _fetch_scalar(cursor)
+    conn.close()
+    return count > 0
 
 
 # ==================== APPOINTMENT FUNCTIONS ====================

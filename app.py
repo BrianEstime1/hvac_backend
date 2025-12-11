@@ -289,6 +289,7 @@ def api_get_invoices():
                 'date': invoice['date'],
                 'technician': invoice['technician'],
                 'work_performed': invoice['work_performed'],
+                'description': invoice['description'],
                 'labor_cost': invoice['labor_cost'],
                 'materials_cost': invoice['materials_cost'],
                 'tax_rate': invoice['tax_rate'],

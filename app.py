@@ -1,8 +1,10 @@
 import logging
-from flask import Flask, jsonify, request
+import os
+from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 import sqlite3
 from datetime import datetime
+from auth import AuthConfigError, generate_token, require_auth
 from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
@@ -85,9 +87,43 @@ _check_database_connectivity()
 init_database()
 
 
+# ==================== AUTH ENDPOINTS ====================
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_auth_login():
+    try:
+        data = request.get_json() or {}
+        password = data.get('password')
+
+        expected_password = os.environ.get('APP_PASSWORD')
+        if expected_password is None:
+            return jsonify({'error': 'APP_PASSWORD environment variable is not set'}), 500
+
+        if not password:
+            return jsonify({'error': 'Password is required'}), 400
+
+        if password != expected_password:
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        token = generate_token()
+        return jsonify({'token': token})
+    except AuthConfigError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': f'Authentication failed: {str(e)}'}), 500
+
+
+@app.route('/api/auth/verify', methods=['GET'])
+@require_auth
+def api_auth_verify():
+    payload = getattr(g, 'jwt_payload', {})
+    return jsonify({'valid': True, 'payload': payload})
+
+
 # ==================== DASHBOARD ENDPOINT ====================
 
 @app.route('/api/dashboard/stats', methods=['GET'])
+@require_auth
 def api_get_dashboard_stats():
     """Get dashboard statistics"""
     try:
@@ -114,6 +150,7 @@ def api_get_dashboard_stats():
 # ==================== CUSTOMER ENDPOINTS ====================
 
 @app.route('/api/customers', methods=['GET'])
+@require_auth
 def api_get_customers():
     """Get all customers"""
     try:
@@ -125,6 +162,7 @@ def api_get_customers():
 
 
 @app.route('/api/customers/<int:customer_id>', methods=['GET'])
+@require_auth
 def api_get_customer(customer_id):
     """Get single customer by ID"""
     try:
@@ -137,6 +175,7 @@ def api_get_customer(customer_id):
 
 
 @app.route('/api/customers', methods=['POST'])
+@require_auth
 def api_create_customer():
     """Create new customer"""
     try:
@@ -174,6 +213,7 @@ def api_create_customer():
 
 
 @app.route('/api/customers/<int:customer_id>', methods=['PUT'])
+@require_auth
 def api_update_customer(customer_id):
     """Update existing customer"""
     try:
@@ -214,6 +254,7 @@ def api_update_customer(customer_id):
 
 
 @app.route('/api/customers/<int:customer_id>', methods=['DELETE'])
+@require_auth
 def api_delete_customer(customer_id):
     """Delete customer (only if no invoices)"""
     try:
@@ -239,6 +280,7 @@ def api_delete_customer(customer_id):
 
 
 @app.route('/api/customers/<int:customer_id>/invoices', methods=['GET'])
+@require_auth
 def api_get_customer_invoices(customer_id):
     """Get all invoices for a customer"""
     try:
@@ -273,6 +315,7 @@ def api_get_customer_invoices(customer_id):
 # ==================== INVOICE ENDPOINTS ====================
 
 @app.route('/api/invoices', methods=['GET'])
+@require_auth
 def api_get_invoices():
     """Get all invoices"""
     try:
@@ -307,6 +350,7 @@ def api_get_invoices():
 
 
 @app.route('/api/invoices/<int:invoice_id>', methods=['GET'])
+@require_auth
 def api_get_invoice(invoice_id):
     """Get single invoice"""
     try:
@@ -346,6 +390,7 @@ def api_get_invoice(invoice_id):
 
 
 @app.route('/api/invoices', methods=['POST'])
+@require_auth
 def api_create_invoice():
     """Create new invoice"""
     try:
@@ -417,6 +462,7 @@ def api_create_invoice():
 
 
 @app.route('/api/invoices/<int:invoice_id>', methods=['PUT'])
+@require_auth
 def api_update_invoice(invoice_id):
     """Update invoice"""
     try:
@@ -485,6 +531,7 @@ def api_update_invoice(invoice_id):
 
 
 @app.route('/api/invoices/<int:invoice_id>', methods=['DELETE'])
+@require_auth
 def api_delete_invoice(invoice_id):
     """Delete invoice"""
     try:
@@ -505,6 +552,7 @@ def api_delete_invoice(invoice_id):
 
 
 @app.route('/api/invoices/<int:invoice_id>/status', methods=['PUT'])
+@require_auth
 def api_update_invoice_status(invoice_id):
     """Update invoice status"""
     try:
@@ -538,6 +586,7 @@ def api_update_invoice_status(invoice_id):
 # ==================== QUOTE ENDPOINTS ====================
 
 @app.route('/api/quotes', methods=['GET'])
+@require_auth
 def api_get_quotes():
     """Get all quotes"""
     try:
@@ -563,6 +612,7 @@ def api_get_quotes():
 
 
 @app.route('/api/quotes/<int:quote_id>', methods=['GET'])
+@require_auth
 def api_get_quote(quote_id):
     """Get single quote"""
     try:
@@ -589,6 +639,7 @@ def api_get_quote(quote_id):
 
 
 @app.route('/api/quotes', methods=['POST'])
+@require_auth
 def api_create_quote():
     """Create new quote"""
     try:
@@ -647,6 +698,7 @@ def api_create_quote():
 
 
 @app.route('/api/quotes/<int:quote_id>', methods=['PUT'])
+@require_auth
 def api_update_quote(quote_id):
     """Update quote"""
     try:
@@ -698,6 +750,7 @@ def api_update_quote(quote_id):
 
 
 @app.route('/api/quotes/<int:quote_id>', methods=['DELETE'])
+@require_auth
 def api_delete_quote(quote_id):
     """Delete quote (only if no linked invoices)"""
     try:
@@ -725,6 +778,7 @@ def api_delete_quote(quote_id):
 # ==================== APPOINTMENT ENDPOINTS ====================
 
 @app.route('/api/appointments', methods=['GET'])
+@require_auth
 def api_get_appointments():
     """Get all appointments"""
     try:
@@ -755,6 +809,7 @@ def api_get_appointments():
 
 
 @app.route('/api/appointments/<int:appointment_id>', methods=['GET'])
+@require_auth
 def api_get_appointment(appointment_id):
     """Get single appointment"""
     try:
@@ -785,6 +840,7 @@ def api_get_appointment(appointment_id):
 
 
 @app.route('/api/appointments', methods=['POST'])
+@require_auth
 def api_create_appointment():
     """Create new appointment"""
     try:
@@ -836,6 +892,7 @@ def api_create_appointment():
 
 
 @app.route('/api/appointments/<int:appointment_id>', methods=['PUT'])
+@require_auth
 def api_update_appointment(appointment_id):
     """Update appointment"""
     try:
@@ -881,6 +938,7 @@ def api_update_appointment(appointment_id):
 
 
 @app.route('/api/appointments/<int:appointment_id>', methods=['DELETE'])
+@require_auth
 def api_delete_appointment(appointment_id):
     """Delete appointment"""
     try:
@@ -900,6 +958,7 @@ def api_delete_appointment(appointment_id):
 
 
 @app.route('/api/appointments/<int:appointment_id>/status', methods=['PUT'])
+@require_auth
 def api_update_appointment_status(appointment_id):
     """Update appointment status"""
     try:
@@ -929,6 +988,7 @@ def api_update_appointment_status(appointment_id):
 
 
 @app.route('/api/appointments/<int:appointment_id>/link-invoice', methods=['PUT'])
+@require_auth
 def api_link_appointment_to_invoice(appointment_id):
     """Link appointment to invoice (marks as completed)"""
     try:
@@ -963,6 +1023,7 @@ def api_link_appointment_to_invoice(appointment_id):
 
 
 @app.route('/api/customers/<int:customer_id>/appointments', methods=['GET'])
+@require_auth
 def api_get_customer_appointments(customer_id):
     """Get all appointments for a customer"""
     try:
@@ -995,6 +1056,7 @@ def api_get_customer_appointments(customer_id):
 
 
 @app.route('/api/appointments/date/<date>', methods=['GET'])
+@require_auth
 def api_get_appointments_by_date(date):
     """Get all appointments for a specific date"""
     try:
@@ -1028,6 +1090,7 @@ def api_get_appointments_by_date(date):
 
 
 @app.route('/api/appointments/technician/<technician>', methods=['GET'])
+@require_auth
 def api_get_appointments_by_technician(technician):
     """Get all appointments for a specific technician"""
     try:
@@ -1058,6 +1121,7 @@ def api_get_appointments_by_technician(technician):
 # ==================== INVENTORY ENDPOINTS ====================
 
 @app.route('/api/inventory', methods=['GET'])
+@require_auth
 def api_get_inventory():
     """Get all inventory items"""
     try:
@@ -1091,6 +1155,7 @@ def api_get_inventory():
 
 
 @app.route('/api/inventory/<int:item_id>', methods=['GET'])
+@require_auth
 def api_get_inventory_item(item_id):
     """Get single inventory item"""
     try:
@@ -1122,6 +1187,7 @@ def api_get_inventory_item(item_id):
 
 
 @app.route('/api/inventory', methods=['POST'])
+@require_auth
 def api_create_inventory_item():
     """Create new inventory item"""
     try:
@@ -1190,6 +1256,7 @@ def api_create_inventory_item():
 
 
 @app.route('/api/inventory/<int:item_id>', methods=['PUT'])
+@require_auth
 def api_update_inventory_item(item_id):
     """Update inventory item"""
     try:
@@ -1261,6 +1328,7 @@ def api_update_inventory_item(item_id):
 
 
 @app.route('/api/inventory/<int:item_id>', methods=['DELETE'])
+@require_auth
 def api_delete_inventory_item(item_id):
     """Delete inventory item"""
     try:
@@ -1280,6 +1348,7 @@ def api_delete_inventory_item(item_id):
 
 
 @app.route('/api/inventory/<int:item_id>/adjust', methods=['PUT'])
+@require_auth
 def api_adjust_inventory(item_id):
     """Adjust inventory quantity (add or subtract)"""
     try:
@@ -1321,6 +1390,7 @@ def api_adjust_inventory(item_id):
 
 
 @app.route('/api/inventory/low-stock', methods=['GET'])
+@require_auth
 def api_get_low_stock():
     """Get items below low stock threshold"""
     try:
@@ -1349,6 +1419,7 @@ def api_get_low_stock():
 
 
 @app.route('/api/inventory/category/<category>', methods=['GET'])
+@require_auth
 def api_get_inventory_by_category(category):
     """Get all items in a category"""
     try:
@@ -1382,6 +1453,7 @@ def api_get_inventory_by_category(category):
 
 
 @app.route('/api/inventory/search', methods=['GET'])
+@require_auth
 def api_search_inventory():
     """Search inventory by name or SKU"""
     try:
@@ -1413,6 +1485,7 @@ def api_search_inventory():
 
 
 @app.route('/api/inventory/value', methods=['GET'])
+@require_auth
 def api_get_inventory_value():
     """Get total inventory value"""
     try:
@@ -1429,6 +1502,7 @@ def api_get_inventory_value():
 # ==================== INVENTORY USAGE ENDPOINTS ====================
 
 @app.route('/api/inventory/usage', methods=['POST'])
+@require_auth
 def api_record_usage():
     """Record parts used on a job"""
     try:
@@ -1481,6 +1555,7 @@ def api_record_usage():
 
 
 @app.route('/api/appointments/<int:appointment_id>/inventory-usage', methods=['GET'])
+@require_auth
 def api_get_appointment_usage(appointment_id):
     """Get all parts used for an appointment"""
     try:
@@ -1522,6 +1597,7 @@ def api_get_appointment_usage(appointment_id):
 
 
 @app.route('/api/invoices/<int:invoice_id>/inventory-usage', methods=['GET'])
+@require_auth
 def api_get_invoice_usage(invoice_id):
     """Get all parts used for an invoice"""
     try:
@@ -1563,6 +1639,7 @@ def api_get_invoice_usage(invoice_id):
 
 
 @app.route('/api/inventory/<int:item_id>/usage-history', methods=['GET'])
+@require_auth
 def api_get_item_usage_history(item_id):
     """Get usage history for an inventory item"""
     try:

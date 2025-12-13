@@ -602,10 +602,13 @@ def api_save_invoice_signature(invoice_id):
         if not invoice:
             return jsonify({'error': 'Invoice not found'}), 404
 
-        data = request.get_json() or {}
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON with a signature field'}), 400
+
+        data = request.get_json(silent=True) or {}
         signature = data.get('signature')
         if not signature:
-            return jsonify({'error': 'Signature data is required'}), 400
+            return jsonify({'error': 'Signature field is missing'}), 400
 
         signature_date = datetime.utcnow().isoformat()
         authorization_status = data.get('authorization_status', 'signed')

@@ -145,6 +145,9 @@ def init_database():
             work_performed TEXT,
             description TEXT,
             recommendations TEXT,
+            customer_signature TEXT,
+            signature_date TEXT,
+            authorization_status TEXT DEFAULT 'pending',
             labor_cost REAL DEFAULT 0,
             materials_cost REAL DEFAULT 0,
             tax_rate REAL DEFAULT 0.08,
@@ -177,6 +180,9 @@ def init_database():
     _add_column_if_missing(cursor, 'invoices', 'tax', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'total', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'quote_id', 'INTEGER')
+    _add_column_if_missing(cursor, 'invoices', 'customer_signature', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'signature_date', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'authorization_status', "TEXT DEFAULT 'pending'")
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''
@@ -445,6 +451,23 @@ def update_invoice_status(invoice_id, status):
     ''', (status, invoice_id))
     conn.commit()
     conn.close()
+
+
+def set_invoice_signature(invoice_id, signature_data, signature_date, authorization_status='signed'):
+    """Persist customer signature data for an invoice"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE invoices
+        SET customer_signature = ?,
+            signature_date = ?,
+            authorization_status = ?
+        WHERE id = ?
+    ''', (signature_data, signature_date, authorization_status, invoice_id))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
 
 
 def delete_invoice(invoice_id):

@@ -24,6 +24,7 @@ from database import (
     # Quote functions
     create_quote, get_all_quotes, get_quote_by_id, update_quote,
     delete_quote, check_quote_has_invoices,
+    set_invoice_signature,
     USE_POSTGRES, describe_database_url, get_db_connection
 )
 from validators import (
@@ -298,6 +299,9 @@ def api_get_customer_invoices(customer_id):
                 'date': invoice['date'],
                 'technician': invoice['technician'],
                 'work_performed': invoice['work_performed'],
+                'customer_signature': invoice['customer_signature'],
+                'signature_date': invoice['signature_date'],
+                'authorization_status': invoice['authorization_status'],
                 'total': invoice['total'],
                 'status': invoice['status']
             })
@@ -333,6 +337,9 @@ def api_get_invoices():
                 'technician': invoice['technician'],
                 'work_performed': invoice['work_performed'],
                 'description': invoice['description'],
+                'customer_signature': invoice['customer_signature'],
+                'signature_date': invoice['signature_date'],
+                'authorization_status': invoice['authorization_status'],
                 'labor_cost': invoice['labor_cost'],
                 'materials_cost': invoice['materials_cost'],
                 'tax_rate': invoice['tax_rate'],
@@ -373,6 +380,9 @@ def api_get_invoice(invoice_id):
             'work_performed': invoice['work_performed'],
             'description': invoice['description'],
             'recommendations': invoice['recommendations'],
+            'customer_signature': invoice['customer_signature'],
+            'signature_date': invoice['signature_date'],
+            'authorization_status': invoice['authorization_status'],
             'costs': {
                 'labor': invoice['labor_cost'],
                 'materials': invoice['materials_cost'],
@@ -578,9 +588,41 @@ def api_update_invoice_status(invoice_id):
             'old_status': invoice['status'],
             'new_status': new_status
         })
-    
+
     except Exception as e:
         return jsonify({'error': f'Failed to update status: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/signature', methods=['POST'])
+@require_auth
+def api_save_invoice_signature(invoice_id):
+    """Save base64-encoded customer signature for an invoice"""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        data = request.get_json() or {}
+        signature = data.get('signature')
+        if not signature:
+            return jsonify({'error': 'Signature data is required'}), 400
+
+        signature_date = datetime.utcnow().isoformat()
+        authorization_status = data.get('authorization_status', 'signed')
+
+        success = set_invoice_signature(invoice_id, signature, signature_date, authorization_status)
+        if not success:
+            return jsonify({'error': 'Failed to save signature'}), 500
+
+        return jsonify({
+            'message': 'Signature saved successfully',
+            'invoice_number': invoice['invoice_number'],
+            'signature_date': signature_date,
+            'authorization_status': authorization_status
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
 
 
 # ==================== QUOTE ENDPOINTS ====================

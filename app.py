@@ -1,9 +1,16 @@
+import base64
 import logging
 import os
-from flask import Flask, jsonify, request, g
+from io import BytesIO
+from typing import Optional
+from flask import Flask, jsonify, request, g, send_file
 from flask_cors import CORS
 import sqlite3
 from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 from auth import AuthConfigError, generate_token, require_auth
 from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
@@ -86,6 +93,96 @@ _log_database_configuration()
 _check_database_connectivity()
 
 init_database()
+
+
+def _strip_base64_prefix(signature_data: str) -> str:
+    """Remove any data URL prefix from base64 signature data."""
+    if not signature_data:
+        return ''
+    if signature_data.startswith('data:image/png;base64,'):
+        return signature_data.split(',', 1)[1]
+    return signature_data
+
+
+def _decode_signature(signature_data: str) -> Optional[BytesIO]:
+    """Decode base64 signature data into a binary buffer for PDF embedding."""
+    cleaned_signature = _strip_base64_prefix(signature_data)
+    if not cleaned_signature:
+        return None
+    try:
+        signature_bytes = base64.b64decode(cleaned_signature)
+        return BytesIO(signature_bytes)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Invalid signature data: %s", exc)
+        return None
+
+
+def _generate_invoice_pdf(invoice):
+    """Create an invoice PDF that embeds the customer's signature."""
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    margin = inch
+
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(margin, height - margin, "Invoice")
+
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(margin, height - margin - 20, f"Invoice #: {invoice['invoice_number']}")
+    pdf.drawString(margin, height - margin - 35, f"Date: {invoice['date']}")
+    pdf.drawString(margin, height - margin - 50, f"Technician: {invoice['technician'] or 'N/A'}")
+
+    pdf.drawString(margin, height - margin - 80, f"Customer: {invoice['customer_name']}")
+    pdf.drawString(margin, height - margin - 95, f"Phone: {invoice['phone']}")
+    pdf.drawString(margin, height - margin - 110, f"Address: {invoice['customer_address']}")
+
+    pdf.drawString(margin, height - margin - 140, f"Work Performed: {invoice['work_performed']}")
+    pdf.drawString(margin, height - margin - 155, f"Description: {invoice['description'] or 'N/A'}")
+
+    pdf.drawString(margin, height - margin - 185, f"Subtotal: ${invoice['subtotal']:.2f}")
+    pdf.drawString(margin, height - margin - 200, f"Tax: ${invoice['tax']:.2f} @ {invoice['tax_rate'] * 100:.2f}%")
+    pdf.drawString(margin, height - margin - 215, f"Total: ${invoice['total']:.2f}")
+
+    signature_buffer = _decode_signature(invoice.get('customer_signature') or '')
+    signature_section_y = margin + 120
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(margin, signature_section_y + 30, "Customer Signature – Authorization to Begin Work")
+
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(margin, signature_section_y + 10, "Signature:")
+
+    signature_line_x = margin + 70
+    signature_line_width = 200
+    pdf.line(signature_line_x, signature_section_y, signature_line_x + signature_line_width, signature_section_y)
+
+    if signature_buffer:
+        try:
+            image = ImageReader(signature_buffer)
+            image_height = 60
+            image_width = 200
+            pdf.drawImage(
+                image,
+                signature_line_x,
+                signature_section_y + 10,
+                width=image_width,
+                height=image_height,
+                mask='auto'
+            )
+        except Exception as exc:
+            logger.warning("Failed to embed signature image: %s", exc)
+
+    authorization_text = invoice.get('authorization_status') or ''
+    signature_timestamp = invoice.get('signature_date') or 'Not provided'
+    pdf.drawString(
+        margin,
+        signature_section_y - 20,
+        f"Authorization Status: {authorization_text} | Signed at: {signature_timestamp}"
+    )
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+    return buffer
 
 
 # ==================== AUTH ENDPOINTS ====================
@@ -394,9 +491,34 @@ def api_get_invoice(invoice_id):
             'status': invoice['status'],
             'created_at': invoice['created_at']
         })
-    
+
     except Exception as e:
         return jsonify({'error': f'Failed to retrieve invoice: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/pdf', methods=['GET'])
+@require_auth
+def api_get_invoice_pdf(invoice_id):
+    """Generate and download an invoice PDF using the latest data."""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        if not invoice.get('customer_signature'):
+            return jsonify({'error': 'Signature is required before generating a PDF'}), 400
+
+        pdf_buffer = _generate_invoice_pdf(invoice)
+
+        filename = f"invoice_{invoice['invoice_number']}.pdf"
+        return send_file(
+            pdf_buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate invoice PDF: {str(e)}'}), 500
 
 
 @app.route('/api/invoices', methods=['POST'])

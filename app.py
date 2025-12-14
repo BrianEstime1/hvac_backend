@@ -109,12 +109,15 @@ def _decode_signature(signature_data: str) -> Optional[BytesIO]:
     cleaned_signature = _strip_base64_prefix(signature_data)
     if not cleaned_signature:
         return None
+
     try:
-        signature_bytes = base64.b64decode(cleaned_signature)
-        return BytesIO(signature_bytes)
+        signature_buffer = BytesIO(base64.b64decode(cleaned_signature))
     except (ValueError, TypeError) as exc:
         logger.warning("Invalid signature data: %s", exc)
-        return None
+        raise
+
+    signature_buffer.seek(0)
+    return signature_buffer
 
 
 def _generate_invoice_pdf(invoice):
@@ -158,20 +161,17 @@ def _generate_invoice_pdf(invoice):
     pdf.line(signature_line_x, signature_section_y, signature_line_x + signature_line_width, signature_section_y)
 
     if signature_buffer:
-        try:
-            image = ImageReader(signature_buffer)
-            image_height = 60
-            image_width = 200
-            pdf.drawImage(
-                image,
-                signature_line_x,
-                signature_section_y + 10,
-                width=image_width,
-                height=image_height,
-                mask='auto'
-            )
-        except Exception as exc:
-            logger.warning("Failed to embed signature image: %s", exc)
+        image = ImageReader(signature_buffer)
+        image_height = 80
+        image_width = 200
+        pdf.drawImage(
+            image,
+            signature_line_x,
+            signature_section_y + 10,
+            width=image_width,
+            height=image_height,
+            mask='auto'
+        )
 
     authorization_text = invoice_data['authorization_status'] or ''
     signature_timestamp = invoice_data['signature_date'] or 'Not provided'

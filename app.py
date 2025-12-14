@@ -119,6 +119,8 @@ def _decode_signature(signature_data: str) -> Optional[BytesIO]:
 
 def _generate_invoice_pdf(invoice):
     """Create an invoice PDF that embeds the customer's signature."""
+    invoice_data = dict(invoice)
+
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
@@ -128,22 +130,22 @@ def _generate_invoice_pdf(invoice):
     pdf.drawString(margin, height - margin, "Invoice")
 
     pdf.setFont("Helvetica", 10)
-    pdf.drawString(margin, height - margin - 20, f"Invoice #: {invoice['invoice_number']}")
-    pdf.drawString(margin, height - margin - 35, f"Date: {invoice['date']}")
-    pdf.drawString(margin, height - margin - 50, f"Technician: {invoice['technician'] or 'N/A'}")
+    pdf.drawString(margin, height - margin - 20, f"Invoice #: {invoice_data['invoice_number']}")
+    pdf.drawString(margin, height - margin - 35, f"Date: {invoice_data['date']}")
+    pdf.drawString(margin, height - margin - 50, f"Technician: {invoice_data['technician'] or 'N/A'}")
 
-    pdf.drawString(margin, height - margin - 80, f"Customer: {invoice['customer_name']}")
-    pdf.drawString(margin, height - margin - 95, f"Phone: {invoice['phone']}")
-    pdf.drawString(margin, height - margin - 110, f"Address: {invoice['customer_address']}")
+    pdf.drawString(margin, height - margin - 80, f"Customer: {invoice_data['customer_name']}")
+    pdf.drawString(margin, height - margin - 95, f"Phone: {invoice_data['phone']}")
+    pdf.drawString(margin, height - margin - 110, f"Address: {invoice_data['customer_address']}")
 
-    pdf.drawString(margin, height - margin - 140, f"Work Performed: {invoice['work_performed']}")
-    pdf.drawString(margin, height - margin - 155, f"Description: {invoice['description'] or 'N/A'}")
+    pdf.drawString(margin, height - margin - 140, f"Work Performed: {invoice_data['work_performed']}")
+    pdf.drawString(margin, height - margin - 155, f"Description: {invoice_data['description'] or 'N/A'}")
 
-    pdf.drawString(margin, height - margin - 185, f"Subtotal: ${invoice['subtotal']:.2f}")
-    pdf.drawString(margin, height - margin - 200, f"Tax: ${invoice['tax']:.2f} @ {invoice['tax_rate'] * 100:.2f}%")
-    pdf.drawString(margin, height - margin - 215, f"Total: ${invoice['total']:.2f}")
+    pdf.drawString(margin, height - margin - 185, f"Subtotal: ${invoice_data['subtotal']:.2f}")
+    pdf.drawString(margin, height - margin - 200, f"Tax: ${invoice_data['tax']:.2f} @ {invoice_data['tax_rate'] * 100:.2f}%")
+    pdf.drawString(margin, height - margin - 215, f"Total: ${invoice_data['total']:.2f}")
 
-    signature_buffer = _decode_signature(invoice.get('customer_signature') or '')
+    signature_buffer = _decode_signature(invoice_data['customer_signature'] or '')
     signature_section_y = margin + 120
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(margin, signature_section_y + 30, "Customer Signature – Authorization to Begin Work")
@@ -171,8 +173,8 @@ def _generate_invoice_pdf(invoice):
         except Exception as exc:
             logger.warning("Failed to embed signature image: %s", exc)
 
-    authorization_text = invoice.get('authorization_status') or ''
-    signature_timestamp = invoice.get('signature_date') or 'Not provided'
+    authorization_text = invoice_data['authorization_status'] or ''
+    signature_timestamp = invoice_data['signature_date'] or 'Not provided'
     pdf.drawString(
         margin,
         signature_section_y - 20,
@@ -505,7 +507,7 @@ def api_get_invoice_pdf(invoice_id):
         if not invoice:
             return jsonify({'error': 'Invoice not found'}), 404
 
-        if not invoice.get('customer_signature'):
+        if not invoice['customer_signature']:
             return jsonify({'error': 'Signature is required before generating a PDF'}), 400
 
         pdf_buffer = _generate_invoice_pdf(invoice)

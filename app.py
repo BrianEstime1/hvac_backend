@@ -17,7 +17,7 @@ from database import (
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
     update_invoice_status, delete_customer, create_invoice, update_invoice,
     delete_invoice, check_customer_has_invoices,
-    add_job_photo, get_photos_by_invoice, delete_job_photo,
+    add_job_photo, get_photos_by_invoice, get_photos_by_customer, delete_job_photo,
     # Appointment functions
     create_appointment, get_all_appointments, get_appointment_by_id,
     update_appointment, update_appointment_status, delete_appointment,
@@ -56,6 +56,25 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def normalize_photo_data(photo_data):
+    """Ensure photo_data includes a data URI prefix."""
+    if not photo_data:
+        return photo_data
+
+    trimmed = photo_data.strip()
+    if trimmed.startswith('data:image/'):
+        return trimmed
+
+    if trimmed.startswith('iVBORw0KGgo'):
+        mime_type = 'png'
+    elif trimmed.startswith('/9j/'):
+        mime_type = 'jpeg'
+    else:
+        mime_type = 'jpeg'
+
+    return f'data:image/{mime_type};base64,{trimmed}'
 
 # CORS Configuration - Allow Vercel frontend
 CORS(app, origins=[
@@ -416,6 +435,37 @@ def api_get_customer_invoices(customer_id):
         return jsonify({'error': f'Failed to retrieve invoices: {str(e)}'}), 500
 
 
+@app.route('/api/customers/<int:customer_id>/photos', methods=['GET'])
+@require_auth
+def api_get_customer_photos(customer_id):
+    """Get all job photos for a customer"""
+    try:
+        customer = get_customer_by_id(customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found'}), 404
+
+        photos = get_photos_by_customer(customer_id)
+        photo_list = []
+        for photo in photos:
+            photo_list.append({
+                'id': photo['id'],
+                'invoice_id': photo['invoice_id'],
+                'invoice_number': photo['invoice_number'],
+                'photo_data': normalize_photo_data(photo['photo_data']),
+                'caption': photo['caption'],
+                'created_at': photo['created_at']
+            })
+
+        return jsonify({
+            'customer': {'id': customer['id'], 'name': customer['name']},
+            'photo_count': len(photo_list),
+            'photos': photo_list
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve photos: {str(e)}'}), 500
+
+
 # ==================== INVOICE ENDPOINTS ====================
 
 @app.route('/api/invoices', methods=['GET'])
@@ -771,7 +821,8 @@ def api_add_job_photo(invoice_id):
             return jsonify({'error': 'photo_data is required'}), 400
 
         caption = data.get('caption')
-        photo_id = add_job_photo(invoice_id, photo_data, caption)
+        normalized_photo_data = normalize_photo_data(photo_data)
+        photo_id = add_job_photo(invoice_id, normalized_photo_data, caption)
 
         return jsonify({
             'message': 'Photo uploaded successfully',
@@ -798,7 +849,7 @@ def api_get_job_photos(invoice_id):
             photo_list.append({
                 'id': photo['id'],
                 'invoice_id': photo['invoice_id'],
-                'photo_data': photo['photo_data'],
+                'photo_data': normalize_photo_data(photo['photo_data']),
                 'caption': photo['caption'],
                 'created_at': photo['created_at']
             })

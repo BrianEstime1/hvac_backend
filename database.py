@@ -537,6 +537,22 @@ def get_photos_by_invoice(invoice_id):
     return photos
 
 
+def get_photos_by_customer(customer_id):
+    """Return all photos for a customer via invoice joins."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT job_photos.*, invoices.invoice_number
+        FROM job_photos
+        JOIN invoices ON job_photos.invoice_id = invoices.id
+        WHERE invoices.customer_id = ?
+        ORDER BY job_photos.created_at DESC
+    ''', (customer_id,))
+    photos = cursor.fetchall()
+    conn.close()
+    return photos
+
+
 def delete_job_photo(photo_id):
     """Delete a job photo by id."""
     conn = get_db_connection()

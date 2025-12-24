@@ -17,6 +17,7 @@ from database import (
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
     update_invoice_status, delete_customer, create_invoice, update_invoice,
     delete_invoice, check_customer_has_invoices,
+    add_job_photo, get_photos_by_invoice, delete_job_photo,
     # Appointment functions
     create_appointment, get_all_appointments, get_appointment_by_id,
     update_appointment, update_appointment_status, delete_appointment,
@@ -750,6 +751,80 @@ def api_save_invoice_signature(invoice_id):
 
     except Exception as e:
         return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/photos', methods=['POST'])
+@require_auth
+def api_add_job_photo(invoice_id):
+    """Upload a job photo for an invoice"""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON with photo_data'}), 400
+
+        data = request.get_json(silent=True) or {}
+        photo_data = data.get('photo_data')
+        if not photo_data:
+            return jsonify({'error': 'photo_data is required'}), 400
+
+        caption = data.get('caption')
+        photo_id = add_job_photo(invoice_id, photo_data, caption)
+
+        return jsonify({
+            'message': 'Photo uploaded successfully',
+            'id': photo_id,
+            'invoice_id': invoice_id
+        }), 201
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to upload photo: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/photos', methods=['GET'])
+@require_auth
+def api_get_job_photos(invoice_id):
+    """List all job photos for an invoice"""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        photos = get_photos_by_invoice(invoice_id)
+        photo_list = []
+        for photo in photos:
+            photo_list.append({
+                'id': photo['id'],
+                'invoice_id': photo['invoice_id'],
+                'photo_data': photo['photo_data'],
+                'caption': photo['caption'],
+                'created_at': photo['created_at']
+            })
+
+        return jsonify(photo_list)
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve photos: {str(e)}'}), 500
+
+
+@app.route('/api/photos/<int:photo_id>', methods=['DELETE'])
+@require_auth
+def api_delete_job_photo(photo_id):
+    """Delete a job photo"""
+    try:
+        deleted = delete_job_photo(photo_id)
+        if not deleted:
+            return jsonify({'error': 'Photo not found'}), 404
+
+        return jsonify({
+            'message': 'Photo deleted successfully',
+            'id': photo_id
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete photo: {str(e)}'}), 500
 
 
 # ==================== QUOTE ENDPOINTS ====================

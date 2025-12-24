@@ -160,6 +160,18 @@ def init_database():
         )
     '''))
 
+    # Create job_photos table
+    cursor.execute(_convert_schema_sql('''
+        CREATE TABLE IF NOT EXISTS job_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER NOT NULL,
+            photo_data TEXT NOT NULL,
+            caption TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        )
+    '''))
+
     # Create quotes table
     cursor.execute(_convert_schema_sql('''
         CREATE TABLE IF NOT EXISTS quotes (
@@ -493,6 +505,47 @@ def get_customer_invoices(customer_id):
     invoices = cursor.fetchall()
     conn.close()
     return invoices
+
+
+# ==================== JOB PHOTO FUNCTIONS ====================
+
+def add_job_photo(invoice_id, photo_data, caption=None):
+    """Attach a base64-encoded photo to an invoice."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    photo_id = _execute_insert(cursor, '''
+        INSERT INTO job_photos (invoice_id, photo_data, caption)
+        VALUES (?, ?, ?)
+    ''', (invoice_id, photo_data, caption))
+    conn.commit()
+    conn.close()
+    return photo_id
+
+
+def get_photos_by_invoice(invoice_id):
+    """Return all photos for an invoice."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT *
+        FROM job_photos
+        WHERE invoice_id = ?
+        ORDER BY created_at DESC
+    ''', (invoice_id,))
+    photos = cursor.fetchall()
+    conn.close()
+    return photos
+
+
+def delete_job_photo(photo_id):
+    """Delete a job photo by id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM job_photos WHERE id = ?', (photo_id,))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
 
 
 # ==================== QUOTE FUNCTIONS ====================

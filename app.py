@@ -876,6 +876,22 @@ def api_delete_job_photo(photo_id):
 
     except Exception as e:
         return jsonify({'error': f'Failed to delete photo: {str(e)}'}), 500
+@app.route('/api/invoices/<int:invoice_id>/photos/<int:photo_id>', methods=['DELETE'])
+@require_auth
+def api_delete_invoice_photo(invoice_id, photo_id):
+    """Delete a job photo (alternate route)"""
+    try:
+        deleted = delete_job_photo(photo_id)
+        if not deleted:
+            return jsonify({'error': 'Photo not found'}), 404
+
+        return jsonify({
+            'message': 'Photo deleted successfully',
+            'id': photo_id
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete photo: {str(e)}'}), 500
 
 
 # ==================== QUOTE ENDPOINTS ====================

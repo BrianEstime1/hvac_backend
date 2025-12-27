@@ -16,7 +16,7 @@ from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
     update_invoice_status, delete_customer, create_invoice, update_invoice,
-    delete_invoice, check_customer_has_invoices,
+    delete_invoice, check_customer_has_invoices, get_unpaid_invoices_total,
     add_job_photo, get_photos_by_invoice, get_photos_by_customer, delete_job_photo,
     # Appointment functions
     create_appointment, get_all_appointments, get_appointment_by_id,
@@ -250,18 +250,21 @@ def api_get_dashboard_stats():
         customers = get_all_customers()
         appointments = get_all_appointments()
         low_stock = get_low_stock_items()
-        
+        unpaid_total, unpaid_count = get_unpaid_invoices_total()
+
         # Get upcoming appointments (today and future)
         today = datetime.now().date().isoformat()
         upcoming_appointments = [apt for apt in appointments if apt['appointment_date'] >= today and apt['status'] == 'scheduled']
-        
+
         # Convert low_stock items to dictionaries
         low_stock_list = [dict(item) for item in low_stock]
-        
+
         return jsonify({
             'total_customers': len(customers),
             'upcoming_appointments': len(upcoming_appointments),
-            'low_stock_items': low_stock_list
+            'low_stock_items': low_stock_list,
+            'unpaid_total': unpaid_total,
+            'unpaid_count': unpaid_count
         })
     except Exception as e:
         return jsonify({'error': f'Failed to retrieve stats: {str(e)}'}), 500
@@ -744,25 +747,65 @@ def api_update_invoice_status(invoice_id):
         data = request.get_json()
         if not data:
             return jsonify({'error': 'Invalid JSON'}), 400
-        
+
         new_status = data.get('status')
         valid_statuses = ['draft', 'sent', 'paid', 'cancelled']
         is_valid, error = validate_status(new_status, valid_statuses)
         if not is_valid:
             return jsonify({'error': error}), 400
-        
+
         invoice = get_invoice_by_id(invoice_id)
         if not invoice:
             return jsonify({'error': 'Invoice not found'}), 404
-        
+
         update_invoice_status(invoice_id, new_status)
-        
+
         return jsonify({
             'message': 'Status updated successfully',
             'invoice_number': invoice['invoice_number'],
             'old_status': invoice['status'],
             'new_status': new_status
         })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to update status: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/status', methods=['PATCH'])
+@require_auth
+def api_patch_invoice_status(invoice_id):
+    """Update invoice status with optional payment details"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+
+        new_status = data.get('status')
+        valid_statuses = ['draft', 'sent', 'paid']
+        is_valid, error = validate_status(new_status, valid_statuses)
+        if not is_valid:
+            return jsonify({'error': error}), 400
+
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        paid_date = data.get('paid_date')
+        payment_method = data.get('payment_method')
+
+        update_invoice_status(invoice_id, new_status, paid_date, payment_method)
+
+        response = {
+            'message': 'Status updated successfully',
+            'invoice_number': invoice['invoice_number'],
+            'old_status': invoice['status'],
+            'new_status': new_status
+        }
+        if new_status == 'paid':
+            response['paid_date'] = paid_date
+            response['payment_method'] = payment_method
+
+        return jsonify(response)
 
     except Exception as e:
         return jsonify({'error': f'Failed to update status: {str(e)}'}), 500

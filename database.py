@@ -195,6 +195,8 @@ def init_database():
     _add_column_if_missing(cursor, 'invoices', 'customer_signature', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'signature_date', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'authorization_status', "TEXT DEFAULT 'pending'")
+    _add_column_if_missing(cursor, 'invoices', 'paid_date', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'payment_method', 'TEXT')
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''
@@ -452,15 +454,25 @@ def update_invoice(invoice_id, invoice_number, date, technician, work_performed,
     return rows_affected > 0
 
 
-def update_invoice_status(invoice_id, status):
-    """Update invoice status (draft, sent, paid, cancelled)"""
+def update_invoice_status(invoice_id, status, paid_date=None, payment_method=None):
+    """Update invoice status (draft, sent, paid, cancelled).
+
+    If status is 'paid', also sets paid_date and payment_method.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE invoices
-        SET status = ?
-        WHERE id = ?
-    ''', (status, invoice_id))
+    if status == 'paid':
+        cursor.execute('''
+            UPDATE invoices
+            SET status = ?, paid_date = ?, payment_method = ?
+            WHERE id = ?
+        ''', (status, paid_date, payment_method, invoice_id))
+    else:
+        cursor.execute('''
+            UPDATE invoices
+            SET status = ?
+            WHERE id = ?
+        ''', (status, invoice_id))
     conn.commit()
     conn.close()
 
@@ -505,6 +517,22 @@ def get_customer_invoices(customer_id):
     invoices = cursor.fetchall()
     conn.close()
     return invoices
+
+
+def get_unpaid_invoices_total():
+    """Return the sum of 'total' and count of invoices where status != 'paid'."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT COALESCE(SUM(total), 0) AS unpaid_total, COUNT(*) AS unpaid_count
+        FROM invoices
+        WHERE status != 'paid'
+    ''')
+    row = cursor.fetchone()
+    conn.close()
+    if isinstance(row, dict):
+        return row['unpaid_total'], row['unpaid_count']
+    return row[0], row[1]
 
 
 # ==================== JOB PHOTO FUNCTIONS ====================

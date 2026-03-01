@@ -12,6 +12,8 @@ from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from auth import AuthConfigError, generate_token, require_auth
+import stripe
+stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
 from database import (
     get_all_customers, get_all_invoices, get_customer_by_id, add_customer,
     get_customer_invoices, get_invoice_by_id, init_database, update_customer,
@@ -2029,6 +2031,255 @@ def api_get_item_usage_history(item_id):
     
     except Exception as e:
         return jsonify({'error': f'Failed to retrieve usage history: {str(e)}'}), 500
+
+# ==================== STRIPE ENDPOINTS ====================
+
+@app.route('/api/invoices/<int:invoice_id>/stripe-link', methods=['POST'])
+@require_auth
+def api_create_stripe_payment_link(invoice_id):
+    """Create a Stripe Payment Link for an invoice and return the URL."""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        if not stripe.api_key:
+            return jsonify({'error': 'Stripe is not configured. Add STRIPE_SECRET_KEY to environment variables.'}), 500
+
+        invoice_data = dict(invoice)
+        total_cents = int(float(invoice_data.get('total') or invoice_data.get('labor_cost') or 0) * 100)
+
+        if total_cents <= 0:
+            return jsonify({'error': 'Invoice total must be greater than $0 to create a payment link'}), 400
+
+        customer_name = invoice_data.get('customer_name', 'Customer')
+        invoice_number = invoice_data.get('invoice_number', str(invoice_id))
+        description = invoice_data.get('work_performed') or invoice_data.get('description') or 'HVAC Service'
+
+        # Create a Stripe Price on the fly
+        price = stripe.Price.create(
+            unit_amount=total_cents,
+            currency='usd',
+            product_data={
+                'name': f'FerdAir Invoice #{invoice_number}',
+                'description': f'{description} — {customer_name}',
+            },
+        )
+
+        frontend_url = os.environ.get('FRONTEND_URL', 'https://hvac-frontend-eight.vercel.app')
+
+        # Create Payment Link
+        payment_link = stripe.PaymentLink.create(
+            line_items=[{'price': price.id, 'quantity': 1}],
+            after_completion={
+                'type': 'redirect',
+                'redirect': {'url': f'{frontend_url}/payment-success?invoice={invoice_id}'},
+            },
+            metadata={
+                'invoice_id': str(invoice_id),
+                'invoice_number': invoice_number,
+            },
+        )
+
+        logger.info("Created Stripe payment link for invoice %s: %s", invoice_id, payment_link.url)
+
+        return jsonify({
+            'url': payment_link.url,
+            'payment_link_id': payment_link.id,
+            'amount': total_cents / 100,
+            'invoice_number': invoice_number,
+        })
+
+    except stripe.error.AuthenticationError:
+        return jsonify({'error': 'Invalid Stripe API key. Check STRIPE_SECRET_KEY.'}), 500
+    except stripe.error.StripeError as e:
+        logger.error("Stripe error for invoice %s: %s", invoice_id, str(e))
+        return jsonify({'error': f'Stripe error: {str(e)}'}), 500
+    except Exception as e:
+        logger.exception("Failed to create Stripe payment link for invoice %s", invoice_id)
+        return jsonify({'error': f'Failed to create payment link: {str(e)}'}), 500
+
+
+@app.route('/api/stripe/webhook', methods=['POST'])
+def api_stripe_webhook():
+    """
+    Stripe webhook — automatically marks invoice as paid when customer pays.
+    
+    Setup in Stripe Dashboard:
+    1. Go to stripe.com/dashboard → Developers → Webhooks
+    2. Add endpoint: https://your-render-app.onrender.com/api/stripe/webhook
+    3. Select event: checkout.session.completed
+    4. Copy the Signing Secret → add as STRIPE_WEBHOOK_SECRET env var on Render
+    """
+    payload = request.get_data()
+    sig_header = request.headers.get('Stripe-Signature')
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+
+    if not webhook_secret:
+        logger.warning("STRIPE_WEBHOOK_SECRET not set — skipping signature verification")
+        event = request.get_json()
+    else:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        except stripe.error.SignatureVerificationError:
+            logger.warning("Invalid Stripe webhook signature")
+            return jsonify({'error': 'Invalid signature'}), 400
+        except Exception as e:
+            logger.error("Webhook error: %s", str(e))
+            return jsonify({'error': str(e)}), 400
+
+    # Handle successful payment
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        invoice_id = session.get('metadata', {}).get('invoice_id')
+
+        if invoice_id:
+            try:
+                invoice_id = int(invoice_id)
+                invoice = get_invoice_by_id(invoice_id)
+                if invoice and invoice['status'] != 'paid':
+                    paid_date = datetime.utcnow().strftime('%Y-%m-%d')
+                    update_invoice_status(invoice_id, 'paid', paid_date, 'Stripe')
+                    logger.info("Invoice %s automatically marked as paid via Stripe webhook", invoice_id)
+                else:
+                    logger.info("Invoice %s not found or already paid", invoice_id)
+            except Exception as e:
+                logger.error("Failed to update invoice status from webhook: %s", str(e))
+
+    # Handle payment link payment (payment_intent.succeeded also fires)
+    elif event['type'] == 'payment_intent.succeeded':
+        payment_intent = event['data']['object']
+        metadata = payment_intent.get('metadata', {})
+        invoice_id = metadata.get('invoice_id')
+        if invoice_id:
+            try:
+                invoice_id = int(invoice_id)
+                invoice = get_invoice_by_id(invoice_id)
+                if invoice and invoice['status'] != 'paid':
+                    paid_date = datetime.utcnow().strftime('%Y-%m-%d')
+                    update_invoice_status(invoice_id, 'paid', paid_date, 'Stripe')
+                    logger.info("Invoice %s marked paid via payment_intent.succeeded", invoice_id)
+            except Exception as e:
+                logger.error("Failed to handle payment_intent webhook: %s", str(e))
+
+    return jsonify({'received': True})
+
+# ==================== PUBLIC BOOKING ENDPOINT ====================
+
+@app.route('/api/bookings/public', methods=['POST'])
+def api_public_booking():
+    """
+    Public booking submission from ferdair.com/book.
+    No authentication required.
+    Creates a customer (if new) and an appointment.
+    Sends SMS notification to owner if Twilio is configured.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+
+        # Validate required fields
+        required = ['name', 'phone', 'address', 'service_type', 'preferred_date', 'preferred_time']
+        is_valid, error = validate_required_fields(data, required)
+        if not is_valid:
+            return jsonify({'error': error}), 400
+
+        # Validate phone
+        is_valid, phone_result = validate_phone(data.get('phone'))
+        if not is_valid:
+            return jsonify({'error': phone_result}), 400
+
+        # Validate date
+        is_valid, date_result = validate_date(data.get('preferred_date'))
+        if not is_valid:
+            return jsonify({'error': date_result}), 400
+
+        name = data.get('name', '').strip()
+        address = data.get('address', '').strip()
+        service_type = data.get('service_type', '').strip()
+        preferred_time = data.get('preferred_time', '').strip()
+        notes = data.get('notes', '').strip()
+        email = data.get('email', '').strip()
+
+        # Check if customer already exists by phone number
+        all_customers = get_all_customers()
+        existing_customer = None
+        for c in all_customers:
+            if c['phone'] == phone_result:
+                existing_customer = c
+                break
+
+        if existing_customer:
+            customer_id = existing_customer['id']
+            logger.info("Public booking: matched existing customer %s (id=%s)", name, customer_id)
+        else:
+            # Create new customer
+            customer_id = add_customer(name, phone_result, address)
+            logger.info("Public booking: created new customer %s (id=%s)", name, customer_id)
+
+        # Create appointment
+        appointment_id = create_appointment(
+            customer_id=customer_id,
+            appointment_date=date_result,
+            appointment_time=preferred_time,
+            service_type=service_type,
+            technician='',
+            notes=f'{notes}\n\nBooked via website. Email: {email}'.strip() if email else notes,
+        )
+
+        logger.info("Public booking: created appointment %s for customer %s", appointment_id, customer_id)
+
+        # Optional: Send SMS to owner via Twilio
+        _send_booking_sms_notification(name, phone_result, service_type, date_result, preferred_time)
+
+        return jsonify({
+            'message': 'Booking submitted successfully',
+            'appointment_id': appointment_id,
+        }), 201
+
+    except Exception as e:
+        logger.exception("Public booking failed")
+        return jsonify({'error': f'Booking failed: {str(e)}'}), 500
+
+
+def _send_booking_sms_notification(customer_name, customer_phone, service_type, date, time_slot):
+    """Send SMS to owner when a new booking comes in. Requires Twilio env vars."""
+    try:
+        account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+        auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+        from_number = os.environ.get('TWILIO_FROM_NUMBER')
+        owner_phone = os.environ.get('OWNER_PHONE')
+
+        if not all([account_sid, auth_token, from_number, owner_phone]):
+            logger.info("Twilio not configured — skipping SMS notification")
+            return
+
+        from twilio.rest import Client
+        client = Client(account_sid, auth_token)
+
+        message_body = (
+            f"📅 New FerdAir Booking!\n"
+            f"Customer: {customer_name}\n"
+            f"Phone: {customer_phone}\n"
+            f"Service: {service_type}\n"
+            f"Date: {date}\n"
+            f"Time: {time_slot}\n"
+            f"Check the app for details."
+        )
+
+        client.messages.create(
+            body=message_body,
+            from_=from_number,
+            to=owner_phone,
+        )
+
+        logger.info("SMS notification sent to owner for booking by %s", customer_name)
+
+    except Exception as e:
+        # Don't fail the booking if SMS fails
+        logger.warning("Failed to send SMS notification: %s", str(e))
+
 
 
 if __name__ == '__main__':

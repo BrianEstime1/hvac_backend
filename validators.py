@@ -157,7 +157,7 @@ def validate_time(time_string):
 
 def validate_appointment_status(status):
     """Validate appointment status"""
-    valid_statuses = ['scheduled', 'in-progress', 'completed', 'cancelled']
+    valid_statuses = ['pending', 'scheduled', 'in-progress', 'completed', 'cancelled']
     if status not in valid_statuses:
         return False, f"Status must be one of: {', '.join(valid_statuses)}"
     return True, None

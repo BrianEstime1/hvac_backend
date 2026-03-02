@@ -78,8 +78,10 @@ def normalize_photo_data(photo_data):
 
     return f'data:image/{mime_type};base64,{trimmed}'
 
-# CORS Configuration - Allow Vercel frontend
+# CORS Configuration - Allow Vercel frontend and custom domain
 CORS(app, origins=[
+    'https://ferdair.com',
+    'https://www.ferdair.com',
     'https://hvac-frontend-eight.vercel.app',
     'https://hvac-frontend-git-main-brianestime1s-projects.vercel.app',
     'https://hvac-frontend-skxykklys-brianestime1s-projects.vercel.app',
@@ -2061,8 +2063,7 @@ def api_create_stripe_payment_link(invoice_id):
             unit_amount=total_cents,
             currency='usd',
             product_data={
-                'name': f'FerdAir Invoice #{invoice_number}',
-                'description': f'{description} — {customer_name}',
+                'name': f'FerdAir Invoice #{invoice_number} — {customer_name}',
             },
         )
 
@@ -2218,7 +2219,7 @@ def api_public_booking():
             customer_id = add_customer(name, phone_result, address)
             logger.info("Public booking: created new customer %s (id=%s)", name, customer_id)
 
-        # Create appointment
+        # Create appointment with 'pending' status (requires confirmation)
         appointment_id = create_appointment(
             customer_id=customer_id,
             appointment_date=date_result,
@@ -2226,6 +2227,7 @@ def api_public_booking():
             service_type=service_type,
             technician='',
             notes=f'{notes}\n\nBooked via website. Email: {email}'.strip() if email else notes,
+            status='pending',
         )
 
         logger.info("Public booking: created appointment %s for customer %s", appointment_id, customer_id)

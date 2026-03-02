@@ -678,7 +678,7 @@ def check_quote_has_invoices(quote_id):
 # ==================== APPOINTMENT FUNCTIONS ====================
 
 def create_appointment(customer_id, appointment_date, appointment_time, 
-                       service_type, technician="", notes=""):
+                       service_type, technician="", notes="", status="scheduled"):
     """Create a new appointment"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -688,9 +688,9 @@ def create_appointment(customer_id, appointment_date, appointment_time,
             customer_id, appointment_date, appointment_time,
             technician, service_type, notes, status
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'scheduled')
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (customer_id, appointment_date, appointment_time, 
-          technician, service_type, notes))
+          technician, service_type, notes, status))
     
     conn.commit()
     conn.close()

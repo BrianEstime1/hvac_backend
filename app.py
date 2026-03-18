@@ -2232,8 +2232,13 @@ def api_public_booking():
 
         logger.info("Public booking: created appointment %s for customer %s", appointment_id, customer_id)
 
-        # Optional: Send SMS to owner via Twilio
+        # Send SMS + Push notifications to owner
         _send_booking_sms_notification(name, phone_result, service_type, date_result, preferred_time)
+        _send_push_notification(
+            title="📅 New FerdAir Booking!",
+            body=f"{name} — {service_type} on {date_result}",
+            url='/appointments'
+        )
 
         return jsonify({
             'message': 'Booking submitted successfully',
@@ -2284,5 +2289,304 @@ def _send_booking_sms_notification(customer_name, customer_phone, service_type, 
 
 
 
+# ── Push Notification Support ─────────────────────────────────────────────────
+
+import json as _json
+
+def _get_push_subscriptions():
+    """Load push subscriptions from DB or fallback JSON file."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT subscription_json FROM push_subscriptions")
+        rows = cursor.fetchall()
+        conn.close()
+        return [_json.loads(r[0] if isinstance(r, tuple) else r['subscription_json']) for r in rows]
+    except Exception:
+        return []
+
+def _ensure_push_table():
+    """Create push_subscriptions table if it doesn't exist."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if USE_POSTGRES:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id SERIAL PRIMARY KEY,
+                    subscription_json TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subscription_json TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("Could not create push_subscriptions table: %s", e)
+
+_ensure_push_table()
+
+
+@app.route('/api/push/vapid-public-key', methods=['GET'])
+def api_push_vapid_key():
+    """Return the VAPID public key for the frontend to use."""
+    key = os.environ.get('VAPID_PUBLIC_KEY', '')
+    return jsonify({'publicKey': key})
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+@require_auth
+def api_push_subscribe():
+    """Save a push subscription from the admin PWA."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+        sub_json = _json.dumps(data)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if USE_POSTGRES:
+            cursor.execute(
+                "INSERT INTO push_subscriptions (subscription_json) VALUES (%s) ON CONFLICT (subscription_json) DO NOTHING",
+                (sub_json,)
+            )
+        else:
+            cursor.execute(
+                "INSERT OR IGNORE INTO push_subscriptions (subscription_json) VALUES (?)",
+                (sub_json,)
+            )
+        conn.commit()
+        conn.close()
+        logger.info("Push subscription saved")
+        return jsonify({'message': 'Subscribed'}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+@require_auth
+def api_push_unsubscribe():
+    """Remove a push subscription."""
+    try:
+        data = request.get_json()
+        sub_json = _json.dumps(data)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM push_subscriptions WHERE subscription_json = %s", (sub_json,))
+        else:
+            cursor.execute("DELETE FROM push_subscriptions WHERE subscription_json = ?", (sub_json,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Unsubscribed'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _send_push_notification(title, body, url='/appointments'):
+    """Send a Web Push notification to all subscribed devices."""
+    try:
+        from pywebpush import webpush, WebPushException
+        vapid_private = os.environ.get('VAPID_PRIVATE_KEY', '')
+        vapid_public = os.environ.get('VAPID_PUBLIC_KEY', '')
+        vapid_email = os.environ.get('VAPID_EMAIL', 'mailto:admin@ferdair.com')
+
+        if not vapid_private or not vapid_public:
+            logger.info("VAPID keys not configured — skipping push notification")
+            return
+
+        subscriptions = _get_push_subscriptions()
+        if not subscriptions:
+            logger.info("No push subscriptions — skipping push notification")
+            return
+
+        payload = _json.dumps({"title": title, "body": body, "url": url})
+
+        for sub in subscriptions:
+            try:
+                webpush(
+                    subscription_info=sub,
+                    data=payload,
+                    vapid_private_key=vapid_private,
+                    vapid_claims={"sub": vapid_email}
+                )
+                logger.info("Push notification sent: %s", title)
+            except WebPushException as e:
+                if e.response and e.response.status_code == 410:
+                    # Subscription expired — remove it
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    sub_json = _json.dumps(sub)
+                    if USE_POSTGRES:
+                        cursor.execute("DELETE FROM push_subscriptions WHERE subscription_json = %s", (sub_json,))
+                    else:
+                        cursor.execute("DELETE FROM push_subscriptions WHERE subscription_json = ?", (sub_json,))
+                    conn.commit()
+                    conn.close()
+                else:
+                    logger.warning("Push failed: %s", e)
+    except Exception as e:
+        logger.warning("Push notification error: %s", e)
+
+
+
+# ── Background Scheduler (Reminders) ─────────────────────────────────────────
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import datetime as _dt
+
+def _reminder_appointment_day_before():
+    """Push notification for appointments tomorrow."""
+    try:
+        tomorrow = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+        apts = get_all_appointments()
+        upcoming = [
+            a for a in apts
+            if (a['appointment_date'] if isinstance(a, dict) else a[3]) == tomorrow
+            and (a['status'] if isinstance(a, dict) else a[8]) not in ('cancelled', 'completed')
+        ]
+        if not upcoming:
+            return
+        count = len(upcoming)
+        names = ", ".join(
+            (a['customer_name'] if isinstance(a, dict) else a[11])
+            for a in upcoming[:3]
+        )
+        if count > 3:
+            names += f" +{count - 3} more"
+        _send_push_notification(
+            title=f"📅 {count} Appointment{'s' if count > 1 else ''} Tomorrow",
+            body=names,
+            url='/appointments'
+        )
+        logger.info("Day-before reminder sent for %d appointments", count)
+    except Exception as e:
+        logger.warning("Day-before reminder failed: %s", e)
+
+
+def _reminder_appointment_one_hour():
+    """Push notification for appointments starting in ~1 hour."""
+    try:
+        now = _dt.datetime.now()
+        today = now.date().isoformat()
+        target_hour = (now + _dt.timedelta(hours=1)).hour
+
+        apts = get_all_appointments()
+        upcoming = []
+        for a in apts:
+            apt_date = a['appointment_date'] if isinstance(a, dict) else a[3]
+            apt_time = a['appointment_time'] if isinstance(a, dict) else a[4]
+            status = a['status'] if isinstance(a, dict) else a[8]
+            name = a['customer_name'] if isinstance(a, dict) else a[11]
+
+            if apt_date != today or status in ('cancelled', 'completed'):
+                continue
+            if apt_time and str(target_hour).zfill(2) in str(apt_time):
+                upcoming.append(name)
+
+        for name in upcoming:
+            _send_push_notification(
+                title="⏰ Appointment in 1 Hour",
+                body=name,
+                url='/appointments'
+            )
+        if upcoming:
+            logger.info("1-hour reminder sent for %d appointments", len(upcoming))
+    except Exception as e:
+        logger.warning("1-hour reminder failed: %s", e)
+
+
+def _reminder_unpaid_invoices():
+    """Daily push if there are unpaid invoices older than 3 days."""
+    try:
+        invoices = get_all_invoices()
+        cutoff = (_dt.date.today() - _dt.timedelta(days=3)).isoformat()
+        unpaid = [
+            inv for inv in invoices
+            if (inv['status'] if isinstance(inv, dict) else inv[6]) in ('draft', 'sent')
+            and (inv['date'] if isinstance(inv, dict) else inv[3]) <= cutoff
+        ]
+        if not unpaid:
+            return
+        total = sum(
+            float(inv['total_amount'] if isinstance(inv, dict) else inv[5] or 0)
+            for inv in unpaid
+        )
+        _send_push_notification(
+            title=f"💰 {len(unpaid)} Unpaid Invoice{'s' if len(unpaid) > 1 else ''}",
+            body=f"${total:,.2f} outstanding",
+            url='/invoices'
+        )
+        logger.info("Unpaid invoice reminder sent: %d invoices, $%.2f", len(unpaid), total)
+    except Exception as e:
+        logger.warning("Unpaid invoice reminder failed: %s", e)
+
+
+def _reminder_weekly_summary():
+    """Monday morning weekly business summary push."""
+    try:
+        invoices = get_all_invoices()
+        apts = get_all_appointments()
+        today = _dt.date.today()
+        week_ago = (today - _dt.timedelta(days=7)).isoformat()
+        today_str = today.isoformat()
+
+        paid_this_week = [
+            inv for inv in invoices
+            if (inv['status'] if isinstance(inv, dict) else inv[6]) == 'paid'
+            and week_ago <= (inv['date'] if isinstance(inv, dict) else inv[3]) <= today_str
+        ]
+        revenue = sum(
+            float(inv['total_amount'] if isinstance(inv, dict) else inv[5] or 0)
+            for inv in paid_this_week
+        )
+
+        upcoming_week = (today + _dt.timedelta(days=7)).isoformat()
+        upcoming_apts = [
+            a for a in apts
+            if today_str <= (a['appointment_date'] if isinstance(a, dict) else a[3]) <= upcoming_week
+            and (a['status'] if isinstance(a, dict) else a[8]) not in ('cancelled', 'completed')
+        ]
+
+        _send_push_notification(
+            title="📊 Weekly Summary",
+            body=f"${revenue:,.0f} collected · {len(upcoming_apts)} appts this week",
+            url='/dashboard'
+        )
+        logger.info("Weekly summary sent: $%.2f revenue, %d upcoming", revenue, len(upcoming_apts))
+    except Exception as e:
+        logger.warning("Weekly summary failed: %s", e)
+
+
+# Start scheduler (only in production, not during testing)
+import os as _os
+if not _os.environ.get('TESTING'):
+    _scheduler = BackgroundScheduler(timezone='America/New_York')
+
+    # Day-before reminder: every day at 7 PM ET
+    _scheduler.add_job(_reminder_appointment_day_before, CronTrigger(hour=19, minute=0))
+
+    # 1-hour reminder: every hour on the hour
+    _scheduler.add_job(_reminder_appointment_one_hour, CronTrigger(minute=0))
+
+    # Unpaid invoice reminder: every day at 9 AM ET
+    _scheduler.add_job(_reminder_unpaid_invoices, CronTrigger(hour=9, minute=0))
+
+    # Weekly summary: every Monday at 8 AM ET
+    _scheduler.add_job(_reminder_weekly_summary, CronTrigger(day_of_week='mon', hour=8, minute=0))
+
+    _scheduler.start()
+    logger.info("Background scheduler started with 4 reminder jobs")
+
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
+# push routes will be injected below

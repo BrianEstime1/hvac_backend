@@ -2398,13 +2398,17 @@ def _send_push_notification(title, body, url='/appointments'):
         vapid_public = os.environ.get('VAPID_PUBLIC_KEY', '')
         vapid_email = os.environ.get('VAPID_EMAIL', 'mailto:admin@ferdair.com')
 
+        logger.info("Push attempt: title=%s, vapid_private_set=%s, vapid_public_set=%s", 
+                    title, bool(vapid_private), bool(vapid_public))
+
         if not vapid_private or not vapid_public:
-            logger.info("VAPID keys not configured — skipping push notification")
+            logger.warning("VAPID keys not configured — skipping push notification")
             return
 
         subscriptions = _get_push_subscriptions()
+        logger.info("Push subscriptions found: %d", len(subscriptions))
         if not subscriptions:
-            logger.info("No push subscriptions — skipping push notification")
+            logger.warning("No push subscriptions in DB — skipping push notification")
             return
 
         payload = _json.dumps({"title": title, "body": body, "url": url})

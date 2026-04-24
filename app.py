@@ -53,6 +53,18 @@ except ImportError:
     DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+
+# Rate limiting
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
@@ -214,6 +226,7 @@ def _generate_invoice_pdf(invoice):
 # ==================== AUTH ENDPOINTS ====================
 
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def api_auth_login():
     try:
         data = request.get_json() or {}
@@ -2117,12 +2130,12 @@ def api_stripe_webhook():
     webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
 
     if not webhook_secret:
-        logger.warning("STRIPE_WEBHOOK_SECRET not set — skipping signature verification")
-        event = request.get_json()
-    else:
-        try:
-            event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-        except stripe.error.SignatureVerificationError:
+        logger.error("STRIPE_WEBHOOK_SECRET not set — rejecting webhook for security")
+        return jsonify({'error': 'Webhook not configured'}), 500
+    
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except stripe.error.SignatureVerificationError:
             logger.warning("Invalid Stripe webhook signature")
             return jsonify({'error': 'Invalid signature'}), 400
         except Exception as e:
@@ -2168,6 +2181,7 @@ def api_stripe_webhook():
 # ==================== PUBLIC BOOKING ENDPOINT ====================
 
 @app.route('/api/bookings/public', methods=['POST'])
+@limiter.limit("10 per minute")
 def api_public_booking():
     """
     Public booking submission from ferdair.com/book.

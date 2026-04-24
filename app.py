@@ -2136,11 +2136,11 @@ def api_stripe_webhook():
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except stripe.error.SignatureVerificationError:
-            logger.warning("Invalid Stripe webhook signature")
-            return jsonify({'error': 'Invalid signature'}), 400
-        except Exception as e:
-            logger.error("Webhook error: %s", str(e))
-            return jsonify({'error': str(e)}), 400
+        logger.warning("Invalid Stripe webhook signature")
+        return jsonify({'error': 'Invalid signature'}), 400
+    except Exception as e:
+        logger.error("Webhook error: %s", str(e))
+        return jsonify({'error': str(e)}), 400
 
     # Handle successful payment
     if event['type'] == 'checkout.session.completed':

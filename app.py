@@ -1,4 +1,3 @@
-import base64
 import logging
 import os
 from io import BytesIO
@@ -517,9 +516,11 @@ def api_get_invoices():
                 'tax': invoice['tax'],
                 'total': invoice['total'],
                 'status': invoice['status'],
+                'payment_method': invoice['payment_method'],
+                'paid_date': invoice['paid_date'],
                 'created_at': invoice['created_at']
             })
-        
+
         return jsonify(invoice_list)
     
     except Exception as e:
@@ -562,6 +563,8 @@ def api_get_invoice(invoice_id):
                 'total': invoice['total']
             },
             'status': invoice['status'],
+            'payment_method': invoice['payment_method'],
+            'paid_date': invoice['paid_date'],
             'created_at': invoice['created_at']
         })
 

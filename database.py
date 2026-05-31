@@ -372,7 +372,8 @@ def count_customers():
 
 def create_invoice(customer_id, invoice_number, date, technician, work_performed,
                    labor_cost, materials_cost=0, tax_rate=0.08,
-                   scheduled_time="", description="", recommendations=""):
+                   scheduled_time="", description="", recommendations="",
+                   payment_method=""):
     """Create a new invoice and persist calculated totals"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -385,12 +386,13 @@ def create_invoice(customer_id, invoice_number, date, technician, work_performed
         INSERT INTO invoices (
             invoice_number, customer_id, date, scheduled_time,
             technician, work_performed, description, recommendations,
-            labor_cost, materials_cost, subtotal, tax_rate, tax, total
+            labor_cost, materials_cost, subtotal, tax_rate, tax, total,
+            payment_method
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (invoice_number, customer_id, date, scheduled_time, technician,
           work_performed, description, recommendations, labor_cost, materials_cost,
-          subtotal, tax_rate, tax, total))
+          subtotal, tax_rate, tax, total, payment_method))
     conn.commit()
     conn.close()
     return invoice_id

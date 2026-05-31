@@ -651,7 +651,8 @@ def api_create_invoice():
             tax_rate=tax_rate,
             scheduled_time=data.get('scheduled_time', ''),
             description=data.get('description', ''),
-            recommendations=data.get('recommendations', '')
+            recommendations=data.get('recommendations', ''),
+            payment_method=data.get('payment_method', '')
         )
         
         return jsonify({
@@ -2249,7 +2250,7 @@ def api_public_booking():
         # Send SMS + Push notifications to owner
         _send_booking_sms_notification(name, phone_result, service_type, date_result, preferred_time)
         _send_push_notification(
-            title="📅 New FerdAir Booking!",
+            title="\U0001f4c5 New FerdAir Booking!",
             body=f"{name} — {service_type} on {date_result}",
             url='/appointments'
         )
@@ -2280,7 +2281,7 @@ def _send_booking_sms_notification(customer_name, customer_phone, service_type, 
         client = Client(account_sid, auth_token)
 
         message_body = (
-            f"📅 New FerdAir Booking!\n"
+            f"\U0001f4c5 New FerdAir Booking!\n"
             f"Customer: {customer_name}\n"
             f"Phone: {customer_phone}\n"
             f"Service: {service_type}\n"
@@ -2303,7 +2304,7 @@ def _send_booking_sms_notification(customer_name, customer_phone, service_type, 
 
 
 
-# ── Push Notification Support ─────────────────────────────────────────────────
+# ── Push Notification Support ──────────────────────────────────────────────────────────────────────────────
 
 import json as _json
 
@@ -2455,7 +2456,7 @@ def _send_push_notification(title, body, url='/appointments'):
 
 
 
-# ── Background Scheduler (Reminders) ─────────────────────────────────────────
+# ── Background Scheduler (Reminders) ──────────────────────────────────────────────────────────────────────────────
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import datetime as _dt
@@ -2480,7 +2481,7 @@ def _reminder_appointment_day_before():
         if count > 3:
             names += f" +{count - 3} more"
         _send_push_notification(
-            title=f"📅 {count} Appointment{'s' if count > 1 else ''} Tomorrow",
+            title=f"\U0001f4c5 {count} Appointment{'s' if count > 1 else ''} Tomorrow",
             body=names,
             url='/appointments'
         )
@@ -2538,7 +2539,7 @@ def _reminder_unpaid_invoices():
             for inv in unpaid
         )
         _send_push_notification(
-            title=f"💰 {len(unpaid)} Unpaid Invoice{'s' if len(unpaid) > 1 else ''}",
+            title=f"\U0001f4b0 {len(unpaid)} Unpaid Invoice{'s' if len(unpaid) > 1 else ''}",
             body=f"${total:,.2f} outstanding",
             url='/invoices'
         )
@@ -2574,7 +2575,7 @@ def _reminder_weekly_summary():
         ]
 
         _send_push_notification(
-            title="📊 Weekly Summary",
+            title="\U0001f4ca Weekly Summary",
             body=f"${revenue:,.0f} collected · {len(upcoming_apts)} appts this week",
             url='/dashboard'
         )

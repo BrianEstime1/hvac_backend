@@ -115,6 +115,52 @@ def _fetch_scalar(cursor):
         return list(row.values())[0]
     return row[0]
 
+def add_audit_log(invoice_id, event_type, ip_address=None, user_agent=None, notes=None):
+    """Record a signing lifecycle event for an invoice."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    timestamp = datetime.utcnow().isoformat()
+    _execute_insert(cursor, '''
+        INSERT INTO invoice_audit_log (invoice_id, event_type, timestamp, ip_address, user_agent, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (invoice_id, event_type, timestamp, ip_address, user_agent, notes))
+    conn.commit()
+    conn.close()
+    return timestamp
+
+
+def get_audit_log(invoice_id):
+    """Return all audit events for an invoice ordered chronologically."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM invoice_audit_log
+        WHERE invoice_id = ?
+        ORDER BY timestamp ASC
+    ''', (invoice_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def get_invoices_pending_reminder(days_threshold):
+    """Return invoices with a signing link sent/viewed but not yet signed, older than N days."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT invoices.*, customers.name as customer_name
+        FROM invoices
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE invoices.signing_token IS NOT NULL
+          AND invoices.customer_signature IS NULL
+          AND invoices.authorization_status IN ('sent', 'viewed')
+          AND invoices.created_at <= datetime('now', ? || ' days')
+    ''', (f'-{days_threshold}',))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
 def get_setting(key):
     """Retrieve a setting value by key."""
     conn = get_db_connection()
@@ -263,6 +309,20 @@ def init_database():
         )
     '''))
 
+    # Audit log for invoice signing lifecycle events
+    cursor.execute(_convert_schema_sql('''
+        CREATE TABLE IF NOT EXISTS invoice_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            ip_address TEXT,
+            user_agent TEXT,
+            notes TEXT,
+            FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+        )
+    '''))
+
     # Ensure legacy databases gain the derived columns
     _add_column_if_missing(cursor, 'invoices', 'subtotal', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'tax', 'REAL DEFAULT 0')
@@ -274,6 +334,8 @@ def init_database():
     _add_column_if_missing(cursor, 'invoices', 'paid_date', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'payment_method', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'signing_token', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'signing_ip', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'signing_user_agent', 'TEXT')
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''
@@ -556,7 +618,8 @@ def update_invoice_status(invoice_id, status, paid_date=None, payment_method=Non
     conn.close()
 
 
-def set_invoice_signature(invoice_id, signature_data, signature_date, authorization_status='signed'):
+def set_invoice_signature(invoice_id, signature_data, signature_date, authorization_status='signed',
+                          ip_address=None, user_agent=None):
     """Persist customer signature data for an invoice"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -564,13 +627,24 @@ def set_invoice_signature(invoice_id, signature_data, signature_date, authorizat
         UPDATE invoices
         SET customer_signature = ?,
             signature_date = ?,
-            authorization_status = ?
+            authorization_status = ?,
+            signing_ip = ?,
+            signing_user_agent = ?
         WHERE id = ?
-    ''', (signature_data, signature_date, authorization_status, invoice_id))
+    ''', (signature_data, signature_date, authorization_status, ip_address, user_agent, invoice_id))
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()
     return rows_affected > 0
+
+
+def set_invoice_authorization_status(invoice_id, status):
+    """Update only the authorization_status field."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE invoices SET authorization_status = ? WHERE id = ?', (status, invoice_id))
+    conn.commit()
+    conn.close()
 
 
 def delete_invoice(invoice_id):

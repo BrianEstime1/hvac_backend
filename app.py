@@ -35,9 +35,10 @@ from database import (
     # Quote functions
     create_quote, get_all_quotes, get_quote_by_id, update_quote,
     delete_quote, check_quote_has_invoices,
-    set_invoice_signature,
+    set_invoice_signature, set_invoice_authorization_status,
     get_setting, set_setting,
     get_invoice_by_signing_token, set_invoice_signing_token,
+    add_audit_log, get_audit_log, get_invoices_pending_reminder,
     USE_POSTGRES, describe_database_url, get_db_connection
 )
 from validators import (
@@ -894,7 +895,7 @@ def api_save_owner_signature():
 @app.route('/api/invoices/<int:invoice_id>/signing-token', methods=['POST'])
 @require_auth
 def api_generate_signing_token(invoice_id):
-    """Generate (or return existing) a unique public signing token for an invoice."""
+    """Generate (or return existing) a unique public signing token and log the 'sent' event."""
     try:
         invoice = get_invoice_by_id(invoice_id)
         if not invoice:
@@ -902,9 +903,16 @@ def api_generate_signing_token(invoice_id):
 
         inv = dict(invoice)
         token = inv.get('signing_token')
-        if not token:
+        is_new = not token
+        if is_new:
             token = secrets.token_urlsafe(32)
             set_invoice_signing_token(invoice_id, token)
+
+        # Mark as sent and log the event
+        if inv.get('authorization_status') in ('pending', None) or is_new:
+            set_invoice_authorization_status(invoice_id, 'sent')
+        add_audit_log(invoice_id, 'link_generated',
+                      notes=f"Signing link {'created' if is_new else 'retrieved'}")
 
         frontend_url = os.environ.get('FRONTEND_URL', 'https://hvac-frontend-eight.vercel.app')
         signing_url = f'{frontend_url}/sign/{token}'
@@ -916,13 +924,23 @@ def api_generate_signing_token(invoice_id):
 
 @app.route('/api/sign/<token>', methods=['GET'])
 def api_get_invoice_for_signing(token):
-    """Public endpoint — returns a safe subset of invoice data for the customer signing page."""
+    """Public endpoint — returns invoice data and logs the 'viewed' event."""
     try:
         invoice = get_invoice_by_signing_token(token)
         if not invoice:
             return jsonify({'error': 'Invalid or expired signing link'}), 404
 
         inv = dict(invoice)
+        already_signed = bool(inv.get('customer_signature'))
+
+        # Log view and advance status only if not yet signed
+        if not already_signed:
+            ip = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+            ua = request.headers.get('User-Agent', '')
+            if inv.get('authorization_status') != 'viewed':
+                set_invoice_authorization_status(inv['id'], 'viewed')
+            add_audit_log(inv['id'], 'viewed', ip_address=ip, user_agent=ua)
+
         return jsonify({
             'invoice_number': inv['invoice_number'],
             'customer_name': inv['customer_name'],
@@ -931,7 +949,7 @@ def api_get_invoice_for_signing(token):
             'description': inv.get('description', ''),
             'labor_cost': inv.get('labor_cost', 0),
             'total': inv.get('total', 0),
-            'already_signed': bool(inv.get('customer_signature')),
+            'already_signed': already_signed,
             'signature_date': inv.get('signature_date'),
         })
     except Exception as e:
@@ -941,7 +959,7 @@ def api_get_invoice_for_signing(token):
 @app.route('/api/sign/<token>/signature', methods=['POST'])
 @limiter.limit("10 per minute")
 def api_submit_customer_signature(token):
-    """Public endpoint — lets a customer submit their signature via the signing link."""
+    """Public endpoint — saves customer signature, logs the event, notifies owner."""
     try:
         invoice = get_invoice_by_signing_token(token)
         if not invoice:
@@ -956,10 +974,26 @@ def api_submit_customer_signature(token):
         if not signature:
             return jsonify({'error': 'signature is required'}), 400
 
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+        ua = request.headers.get('User-Agent', '')
         signature_date = datetime.utcnow().isoformat()
-        success = set_invoice_signature(inv['id'], signature, signature_date, 'signed')
+
+        success = set_invoice_signature(
+            inv['id'], signature, signature_date, 'signed',
+            ip_address=ip, user_agent=ua
+        )
         if not success:
             return jsonify({'error': 'Failed to save signature'}), 500
+
+        add_audit_log(inv['id'], 'signed', ip_address=ip, user_agent=ua,
+                      notes=f"Signed remotely by {inv['customer_name']}")
+
+        # Notify owner via push
+        _send_push_notification(
+            title=f"✍️ Invoice Signed — {inv['customer_name']}",
+            body=f"Invoice #{inv['invoice_number']} has been signed remotely.",
+            url='/invoices'
+        )
 
         return jsonify({
             'message': 'Signature saved successfully',
@@ -967,6 +1001,53 @@ def api_submit_customer_signature(token):
         })
     except Exception as e:
         return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
+
+
+@app.route('/api/invoices/<int:invoice_id>/audit-log', methods=['GET'])
+@require_auth
+def api_get_invoice_audit_log(invoice_id):
+    """Return the full signing audit trail for an invoice."""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        events = get_audit_log(invoice_id)
+        return jsonify([
+            {
+                'id': e['id'] if isinstance(e, dict) else e[0],
+                'event_type': e['event_type'] if isinstance(e, dict) else e[2],
+                'timestamp': e['timestamp'] if isinstance(e, dict) else e[3],
+                'ip_address': e['ip_address'] if isinstance(e, dict) else e[4],
+                'user_agent': e['user_agent'] if isinstance(e, dict) else e[5],
+                'notes': e['notes'] if isinstance(e, dict) else e[6],
+            }
+            for e in events
+        ])
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve audit log: {str(e)}'}), 500
+
+
+@app.route('/api/settings/reminder-days', methods=['GET'])
+@require_auth
+def api_get_reminder_days():
+    val = get_setting('reminder_days')
+    return jsonify({'days': int(val) if val else 3})
+
+
+@app.route('/api/settings/reminder-days', methods=['POST'])
+@require_auth
+def api_set_reminder_days():
+    data = request.get_json() or {}
+    days = data.get('days', 3)
+    try:
+        days = int(days)
+        if days < 1:
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify({'error': 'days must be a positive integer'}), 400
+    set_setting('reminder_days', str(days))
+    return jsonify({'message': 'Reminder days updated', 'days': days})
 
 
 @app.route('/api/invoices/<int:invoice_id>/photos', methods=['POST'])
@@ -2689,6 +2770,33 @@ def _reminder_weekly_summary():
         logger.warning("Weekly summary failed: %s", e)
 
 
+def _reminder_unsigned_invoices():
+    """Daily reminder push for invoices with signing links that haven't been signed yet."""
+    try:
+        days_val = get_setting('reminder_days')
+        days_threshold = int(days_val) if days_val else 3
+        pending = get_invoices_pending_reminder(days_threshold)
+        if not pending:
+            return
+        count = len(pending)
+        names = ", ".join(
+            (inv['customer_name'] if isinstance(inv, dict) else inv[-1])
+            for inv in pending[:3]
+        )
+        suffix = f" (+{count - 3} more)" if count > 3 else ""
+        _send_push_notification(
+            title="✏️ Unsigned Invoice Reminder",
+            body=f"{count} invoice{'s' if count != 1 else ''} awaiting signature: {names}{suffix}",
+            url='/invoices'
+        )
+        for inv in pending:
+            inv_id = inv['id'] if isinstance(inv, dict) else inv[0]
+            add_audit_log(inv_id, 'reminder_sent')
+        logger.info("Unsigned invoice reminder sent for %d invoice(s)", count)
+    except Exception as e:
+        logger.warning("Unsigned invoice reminder failed: %s", e)
+
+
 # Start scheduler (only in production, not during testing)
 import os as _os
 if not _os.environ.get('TESTING'):
@@ -2706,8 +2814,11 @@ if not _os.environ.get('TESTING'):
     # Weekly summary: every Monday at 8 AM ET
     _scheduler.add_job(_reminder_weekly_summary, CronTrigger(day_of_week='mon', hour=8, minute=0))
 
+    # Unsigned invoice reminder: every day at 10 AM ET
+    _scheduler.add_job(_reminder_unsigned_invoices, CronTrigger(hour=10, minute=0))
+
     _scheduler.start()
-    logger.info("Background scheduler started with 4 reminder jobs")
+    logger.info("Background scheduler started with 5 reminder jobs")
 
 
 

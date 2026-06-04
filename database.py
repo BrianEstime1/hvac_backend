@@ -115,6 +115,73 @@ def _fetch_scalar(cursor):
         return list(row.values())[0]
     return row[0]
 
+def get_setting(key):
+    """Retrieve a setting value by key."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return row['value'] if isinstance(row, dict) else row[0]
+
+
+def set_setting(key, value):
+    """Persist a key-value setting, upserting if it already exists."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if USE_POSTGRES:
+        cursor.execute(
+            '''
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+            ''',
+            (key, value),
+        )
+    else:
+        cursor.execute(
+            '''
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ''',
+            (key, value),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_invoice_by_signing_token(token):
+    """Return the invoice (with customer details) that matches a signing token."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        SELECT invoices.*, customers.name as customer_name,
+               customers.phone, customers.address as customer_address
+        FROM invoices
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE invoices.signing_token = ?
+        ''',
+        (token,),
+    )
+    invoice = cursor.fetchone()
+    conn.close()
+    return invoice
+
+
+def set_invoice_signing_token(invoice_id, token):
+    """Persist a unique signing token on an invoice."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE invoices SET signing_token = ? WHERE id = ?', (token, invoice_id))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+
 def init_database():
     """Initialize the database with required tables"""
     logger.info("Initializing database schema using %s backend", "PostgreSQL" if USE_POSTGRES else "SQLite")
@@ -187,6 +254,15 @@ def init_database():
         )
     '''))
 
+    # Settings table for key-value configuration (e.g. owner signature)
+    cursor.execute(_convert_schema_sql('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    '''))
+
     # Ensure legacy databases gain the derived columns
     _add_column_if_missing(cursor, 'invoices', 'subtotal', 'REAL DEFAULT 0')
     _add_column_if_missing(cursor, 'invoices', 'tax', 'REAL DEFAULT 0')
@@ -197,6 +273,7 @@ def init_database():
     _add_column_if_missing(cursor, 'invoices', 'authorization_status', "TEXT DEFAULT 'pending'")
     _add_column_if_missing(cursor, 'invoices', 'paid_date', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'payment_method', 'TEXT')
+    _add_column_if_missing(cursor, 'invoices', 'signing_token', 'TEXT')
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''

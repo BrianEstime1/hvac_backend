@@ -1,5 +1,7 @@
+import base64
 import logging
 import os
+import secrets
 from io import BytesIO
 from typing import Optional
 from flask import Flask, jsonify, request, g, send_file
@@ -34,6 +36,8 @@ from database import (
     create_quote, get_all_quotes, get_quote_by_id, update_quote,
     delete_quote, check_quote_has_invoices,
     set_invoice_signature,
+    get_setting, set_setting,
+    get_invoice_by_signing_token, set_invoice_signing_token,
     USE_POSTGRES, describe_database_url, get_db_connection
 )
 from validators import (
@@ -863,6 +867,104 @@ def api_save_invoice_signature(invoice_id):
             'authorization_status': authorization_status
         }), 200
 
+    except Exception as e:
+        return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
+
+
+@app.route('/api/settings/owner-signature', methods=['GET'])
+@require_auth
+def api_get_owner_signature():
+    """Return the saved owner signature (base64 PNG)."""
+    sig = get_setting('owner_signature')
+    return jsonify({'signature': sig})
+
+
+@app.route('/api/settings/owner-signature', methods=['POST'])
+@require_auth
+def api_save_owner_signature():
+    """Persist the owner signature so it auto-appears on every invoice."""
+    data = request.get_json() or {}
+    sig = data.get('signature')
+    if not sig:
+        return jsonify({'error': 'signature is required'}), 400
+    set_setting('owner_signature', sig)
+    return jsonify({'message': 'Owner signature saved successfully'})
+
+
+@app.route('/api/invoices/<int:invoice_id>/signing-token', methods=['POST'])
+@require_auth
+def api_generate_signing_token(invoice_id):
+    """Generate (or return existing) a unique public signing token for an invoice."""
+    try:
+        invoice = get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({'error': 'Invoice not found'}), 404
+
+        inv = dict(invoice)
+        token = inv.get('signing_token')
+        if not token:
+            token = secrets.token_urlsafe(32)
+            set_invoice_signing_token(invoice_id, token)
+
+        frontend_url = os.environ.get('FRONTEND_URL', 'https://hvac-frontend-eight.vercel.app')
+        signing_url = f'{frontend_url}/sign/{token}'
+
+        return jsonify({'token': token, 'url': signing_url})
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate signing link: {str(e)}'}), 500
+
+
+@app.route('/api/sign/<token>', methods=['GET'])
+def api_get_invoice_for_signing(token):
+    """Public endpoint — returns a safe subset of invoice data for the customer signing page."""
+    try:
+        invoice = get_invoice_by_signing_token(token)
+        if not invoice:
+            return jsonify({'error': 'Invalid or expired signing link'}), 404
+
+        inv = dict(invoice)
+        return jsonify({
+            'invoice_number': inv['invoice_number'],
+            'customer_name': inv['customer_name'],
+            'date': inv['date'],
+            'work_performed': inv.get('work_performed', ''),
+            'description': inv.get('description', ''),
+            'labor_cost': inv.get('labor_cost', 0),
+            'total': inv.get('total', 0),
+            'already_signed': bool(inv.get('customer_signature')),
+            'signature_date': inv.get('signature_date'),
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to load invoice: {str(e)}'}), 500
+
+
+@app.route('/api/sign/<token>/signature', methods=['POST'])
+@limiter.limit("10 per minute")
+def api_submit_customer_signature(token):
+    """Public endpoint — lets a customer submit their signature via the signing link."""
+    try:
+        invoice = get_invoice_by_signing_token(token)
+        if not invoice:
+            return jsonify({'error': 'Invalid or expired signing link'}), 404
+
+        inv = dict(invoice)
+        if inv.get('customer_signature'):
+            return jsonify({'error': 'This invoice has already been signed'}), 409
+
+        data = request.get_json() or {}
+        signature = data.get('signature')
+        if not signature:
+            return jsonify({'error': 'signature is required'}), 400
+
+        signature_date = datetime.utcnow().isoformat()
+        success = set_invoice_signature(inv['id'], signature, signature_date, 'signed')
+        if not success:
+            return jsonify({'error': 'Failed to save signature'}), 500
+
+        return jsonify({
+            'message': 'Signature saved successfully',
+            'signature_date': signature_date,
+        })
     except Exception as e:
         return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
 

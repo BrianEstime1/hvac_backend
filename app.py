@@ -35,6 +35,7 @@ from database import (
     # Quote functions
     create_quote, get_all_quotes, get_quote_by_id, update_quote,
     delete_quote, check_quote_has_invoices,
+    get_quote_by_signing_token, set_quote_signing_token, set_quote_signature,
     set_invoice_signature,
     get_setting, set_setting,
     get_invoice_by_signing_token, set_invoice_signing_token,
@@ -2709,6 +2710,119 @@ if not _os.environ.get('TESTING'):
     _scheduler.start()
     logger.info("Background scheduler started with 4 reminder jobs")
 
+
+
+
+# ==================== QUOTE SIGNATURE ROUTES ====================
+
+@app.route('/api/quotes/<int:quote_id>/signature', methods=['POST'])
+@require_auth
+def api_save_quote_signature(quote_id):
+    """Save base64-encoded customer signature for a quote."""
+    try:
+        quote = get_quote_by_id(quote_id)
+        if not quote:
+            return jsonify({'error': 'Quote not found'}), 404
+
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON with a signature field'}), 400
+
+        data = request.get_json(silent=True) or {}
+        signature = data.get('signature')
+        if not signature:
+            return jsonify({'error': 'Signature field is missing'}), 400
+
+        signature_date = datetime.utcnow().isoformat()
+        authorization_status = data.get('authorization_status', 'signed')
+
+        success = set_quote_signature(quote_id, signature, signature_date, authorization_status)
+        if not success:
+            return jsonify({'error': 'Failed to save signature'}), 500
+
+        return jsonify({
+            'message': 'Signature saved successfully',
+            'signature_date': signature_date,
+            'authorization_status': authorization_status
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
+
+
+@app.route('/api/quotes/<int:quote_id>/signing-token', methods=['POST'])
+@require_auth
+def api_generate_quote_signing_token(quote_id):
+    """Generate (or return existing) a unique public signing token for a quote."""
+    try:
+        quote = get_quote_by_id(quote_id)
+        if not quote:
+            return jsonify({'error': 'Quote not found'}), 404
+
+        q = dict(quote)
+        token = q.get('signing_token')
+        if not token:
+            token = secrets.token_urlsafe(32)
+            set_quote_signing_token(quote_id, token)
+
+        frontend_url = os.environ.get('FRONTEND_URL', 'https://hvac-frontend-eight.vercel.app')
+        signing_url = f'{frontend_url}/sign-quote/{token}'
+
+        return jsonify({'token': token, 'url': signing_url})
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate signing link: {str(e)}'}), 500
+
+
+@app.route('/api/sign-quote/<token>', methods=['GET'])
+def api_get_quote_for_signing(token):
+    """Public endpoint — returns a safe subset of quote data for the customer signing page."""
+    try:
+        quote = get_quote_by_signing_token(token)
+        if not quote:
+            return jsonify({'error': 'Invalid or expired signing link'}), 404
+
+        q = dict(quote)
+        return jsonify({
+            'id': q.get('id'),
+            'customer_name': q.get('customer_name'),
+            'title': q.get('title', ''),
+            'description': q.get('description', ''),
+            'total': q.get('total', 0),
+            'already_signed': bool(q.get('customer_signature')),
+            'signature_date': q.get('signature_date'),
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to load quote: {str(e)}'}), 500
+
+
+@app.route('/api/sign-quote/<token>/signature', methods=['POST'])
+@limiter.limit("10 per minute")
+def api_submit_quote_customer_signature(token):
+    """Public endpoint — lets a customer submit their signature via the quote signing link."""
+    try:
+        quote = get_quote_by_signing_token(token)
+        if not quote:
+            return jsonify({'error': 'Invalid or expired signing link'}), 404
+
+        q = dict(quote)
+        if q.get('customer_signature'):
+            return jsonify({'error': 'This quote has already been signed'}), 409
+
+        data = request.get_json() or {}
+        signature = data.get('signature')
+        if not signature:
+            return jsonify({'error': 'signature is required'}), 400
+
+        signature_date = datetime.utcnow().isoformat()
+        success = set_quote_signature(q['id'], signature, signature_date, 'signed')
+        if not success:
+            return jsonify({'error': 'Failed to save signature'}), 500
+
+        return jsonify({
+            'message': 'Signature saved successfully',
+            'signature_date': signature_date,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to save signature: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

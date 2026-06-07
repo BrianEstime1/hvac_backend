@@ -274,6 +274,11 @@ def init_database():
     _add_column_if_missing(cursor, 'invoices', 'paid_date', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'payment_method', 'TEXT')
     _add_column_if_missing(cursor, 'invoices', 'signing_token', 'TEXT')
+    # Quote signature columns
+    _add_column_if_missing(cursor, 'quotes', 'customer_signature', 'TEXT')
+    _add_column_if_missing(cursor, 'quotes', 'signature_date', 'TEXT')
+    _add_column_if_missing(cursor, 'quotes', 'authorization_status', "TEXT DEFAULT 'pending'")
+    _add_column_if_missing(cursor, 'quotes', 'signing_token', 'TEXT')
 
     # Backfill subtotal, tax, and total for any existing rows that might be NULL/0
     cursor.execute('''
@@ -752,6 +757,53 @@ def check_quote_has_invoices(quote_id):
     count = _fetch_scalar(cursor)
     conn.close()
     return count > 0
+
+
+def get_quote_by_signing_token(token):
+    """Return the quote (with customer details) that matches a signing token."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        SELECT quotes.*, customers.name as customer_name,
+               customers.phone, customers.address as customer_address
+        FROM quotes
+        JOIN customers ON quotes.customer_id = customers.id
+        WHERE quotes.signing_token = ?
+        ''',
+        (token,),
+    )
+    quote = cursor.fetchone()
+    conn.close()
+    return quote
+
+
+def set_quote_signing_token(quote_id, token):
+    """Persist a unique signing token on a quote."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE quotes SET signing_token = ? WHERE id = ?', (token, quote_id))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+
+def set_quote_signature(quote_id, signature_data, signature_date, authorization_status='signed'):
+    """Persist customer signature data for a quote."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE quotes
+        SET customer_signature = ?,
+            signature_date = ?,
+            authorization_status = ?
+        WHERE id = ?
+    ''', (signature_data, signature_date, authorization_status, quote_id))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
 
 
 # ==================== APPOINTMENT FUNCTIONS ====================

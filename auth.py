@@ -20,7 +20,11 @@ def _get_secret_key() -> str:
     return secret
 
 
-def generate_token(hours_valid: int = 12) -> str:
+# Sessions last 30 days so the field PWA doesn't force a re-login mid-job.
+TOKEN_VALID_HOURS = int(os.environ.get("TOKEN_VALID_HOURS", 24 * 30))
+
+
+def generate_token(hours_valid: int = TOKEN_VALID_HOURS) -> str:
     """Generate a JWT token valid for the given number of hours."""
     now = datetime.utcnow()
     payload = {

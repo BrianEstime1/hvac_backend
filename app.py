@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from auth import AuthConfigError, generate_token, require_auth
+from auth import AuthConfigError, TOKEN_VALID_HOURS, generate_token, require_auth
 import stripe
 stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
 from database import (
@@ -247,7 +247,7 @@ def api_auth_login():
             return jsonify({'error': 'Invalid credentials'}), 401
 
         token = generate_token()
-        return jsonify({'token': token})
+        return jsonify({'token': token, 'expires_in': TOKEN_VALID_HOURS * 3600})
     except AuthConfigError as e:
         return jsonify({'error': str(e)}), 500
     except Exception as e:

@@ -731,9 +731,10 @@ def api_update_invoice(invoice_id):
             scheduled_time=data.get('scheduled_time', ''),
             description=data.get('description', ''),
             recommendations=data.get('recommendations', ''),
-            tax_rate=tax_rate
+            tax_rate=tax_rate,
+            payment_method=data.get('payment_method') or None
         )
-        
+
         if success:
             return jsonify({'message': 'Invoice updated successfully', 'id': invoice_id})
         return jsonify({'error': 'Failed to update invoice'}), 500

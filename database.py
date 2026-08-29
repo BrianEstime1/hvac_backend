@@ -513,8 +513,8 @@ def get_invoice_by_id(invoice_id):
 
 def update_invoice(invoice_id, invoice_number, date, technician, work_performed,
                    labor_cost, materials_cost, scheduled_time="", description="",
-                   recommendations="", tax_rate=0.08):
-    """Update an existing invoice"""
+                   recommendations="", tax_rate=0.08, payment_method=None):
+    """Update an existing invoice. payment_method is only changed when provided."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -527,11 +527,12 @@ def update_invoice(invoice_id, invoice_number, date, technician, work_performed,
         SET invoice_number = ?, date = ?, scheduled_time = ?,
             technician = ?, work_performed = ?, description = ?,
             recommendations = ?, labor_cost = ?, materials_cost = ?,
-            subtotal = ?, tax_rate = ?, tax = ?, total = ?
+            subtotal = ?, tax_rate = ?, tax = ?, total = ?,
+            payment_method = COALESCE(?, payment_method)
         WHERE id = ?
     ''', (invoice_number, date, scheduled_time, technician, work_performed,
           description, recommendations, labor_cost, materials_cost,
-          subtotal, tax_rate, tax, total, invoice_id))
+          subtotal, tax_rate, tax, total, payment_method, invoice_id))
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()
